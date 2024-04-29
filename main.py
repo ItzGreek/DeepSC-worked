@@ -38,10 +38,12 @@ parser.add_argument('--dff', default=512, type=int)
 parser.add_argument('--num-layers', default=4, type=int)
 parser.add_argument('--num-heads', default=8, type=int)
 parser.add_argument('--batch-size', default=128, type=int)
-parser.add_argument('--epochs', default=80, type=int)
+parser.add_argument('--epochs', default=5, type=int) #default is 80
 #addditional arguments for MIMO
 parser.add_argument('--n_rx', default = 2, type = int)
 parser.add_argument('--n_tx', default = 32, type = int)
+#n_rx = 2
+#n_tx = 32
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -53,7 +55,7 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 
-def validate(epoch, args, net):
+def validate(epoch, args, net, ch_mat):
     test_eur = EurDataset('test')
     test_iterator = DataLoader(test_eur, batch_size=args.batch_size, num_workers=0,
                                pin_memory=True, collate_fn=collate_data)
@@ -64,7 +66,7 @@ def validate(epoch, args, net):
         for sents in pbar:
             sents = sents.to(device)
             loss = val_step(net, sents, sents, 0.1, pad_idx,
-                            criterion, args.channel)
+                            criterion, args.channel, ch_mat, args.n_tx, args.n_rx)
 
             total += loss
             pbar.set_description(
@@ -97,7 +99,7 @@ def train(epoch, args, net, ch_mat, mi_net=None):
             mi = train_mi(net, mi_net, sents, 0.1,
                           pad_idx, mi_opt, args.channel, ch_mat, args.n_tx, args.n_rx)
             loss = train_step(net, sents, sents, 0.1, pad_idx,
-                              optimizer, criterion, args.channel, mi_net, ch_mat, args.n_tx, args.n_rx)
+                              optimizer, criterion, args.channel, ch_mat, args.n_tx, args.n_rx, mi_net)
             pbar.set_description(
                 'Epoch: {};  Type: Train; Loss: {:.5f}; MI {:.5f}'.format(
                     epoch + 1, loss, mi
@@ -160,8 +162,8 @@ if __name__ == '__main__':
         record_acc = 10
 
         #train(epoch, args, deepsc)
-        train(epoch, args, deepsc, Htot)
-        avg_acc = validate(epoch, args, deepsc)
+        train(epoch, args, deepsc, Htot, mi_net)
+        avg_acc = validate(epoch, args, deepsc, Htot)
 
         # Save the best accuracy score as a "checkpoint"
         if avg_acc < record_acc:
