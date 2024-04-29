@@ -179,9 +179,6 @@ def get_mat(ch_mat, n_tx, n_rx):
         H_inv = np.linalg.inv(H)
 
         return  torch.Tensor(H).to(device), torch.Tensor(H_inv).to(device)        
-    #SIMO case
-    #elif n_tx == 1 and n_rx != 0:
-    
     #MIMo case
     else:
         values = ch_mat[dim1, dim2, dim3, :, :n_tx]
@@ -294,22 +291,21 @@ class Channels():
         Tx_sig_exp = np.repeat(Tx_sig_flat[:, np.newaxis], 2, axis=1) #dim: 31744x2
         
         V = np.conj(Vh).T
-        x_tx = V @ Tx_sig_exp.T #dim: 32x31744
+        x_tx = V @ Tx_sig_exp.T 
         H_eq = H @ V
-        H_herm = np.conj(H_eq).T #dim: 2x2
-        Second_part = np.linalg.inv(H_eq @ H_herm + (n_var**2)*np.eye(n_rx)) #dim: 2x2
-        W_MMSE = H_herm @ Second_part #dim: 32x2 ???
+        H_herm = np.conj(H_eq).T
+        Second_part = np.linalg.inv(H_eq @ H_herm + (n_var**2)*np.eye(n_rx))
+        W_MMSE = H_herm @ Second_part
         n0 = (np.random.normal(0, n_var, (n_rx, len(Tx_sig_flat))) + np.random.normal(0, n_var, (n_rx, len(Tx_sig_flat)))*1j)/np.sqrt(2)
 
-        y = H @ x_tx + n0 #dim: 2x31744 since H has dimensionality 2x32 and x_tx as above
-        x_hat = W_MMSE @ y #dim: 32x31744 ???
+        y = H @ x_tx + n0 
+        x_hat = W_MMSE @ y
         Rx_array = np.round((np.sum(x_hat, axis=0) / 2), decimals = 7)
-        ratio = Rx_array/Tx_sig_flat
+        #ratio = Rx_array/Tx_sig_flat
         
         #Reshape the received vector
-        #shape: 128x248, where 128 is the batch size and 248 is half 496, i.e. 31x16 the other 2 dimensionalities of the original signal.
-        #we use half of it since the original number of symbols was converted to complex values
-        Rx_array = Rx_array.reshape((shape[0],248)) 
+        #we use half of the multiplication between the second and the third shape values since the original number of symbols was converted to complex values
+        Rx_array = Rx_array.reshape((shape[0],int(shape[1]*shape[2]/2))) 
         real_part = np.real(Rx_array)
         imaginary_part = np.imag(Rx_array)
         
@@ -441,11 +437,12 @@ def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_t
     return loss.item()
 
 
-def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx, n_rx, ):
+def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx, n_rx):
     mi_net.train()
     opt.zero_grad()
     channels = Channels()
     #Creates masks for the source sequence and the target input sequence
+    #check if there is a value equal to the padding index in the source
     src_mask = (src == padding_idx).unsqueeze(-2).type(torch.FloatTensor).to(device)  # [batch, 1, seq_len]
     enc_output = model.encoder(src, src_mask)
     channel_enc_output = model.channel_encoder(enc_output)
@@ -462,7 +459,7 @@ def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx,
     elif channel == 'CDL_MMSE':
         Rx_sig = channels.CDL_MMSE(Tx_sig, n_var, ch_mat, n_tx, n_rx)
     else:
-        raise ValueError("Please choose from AWGN, Rayleigh, and Rician")
+        raise ValueError("Please choose from AWGN, Rayleigh, Rician, CDL-ZF and CDL-MMSE")
 
     #joint and marginal distribution computation
     joint, marginal = sample_batch(Tx_sig, Rx_sig)
@@ -481,7 +478,7 @@ def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx,
     #returns mutual information loss
     return loss_mine.item()
 
-def val_step(model, src, trg, n_var, pad, criterion, channel):
+def val_step(model, src, trg, n_var, pad, criterion, channel, ch_mat, n_tx, n_rx):
     channels = Channels()
     trg_inp = trg[:, :-1]
     trg_real = trg[:, 1:]
@@ -498,8 +495,12 @@ def val_step(model, src, trg, n_var, pad, criterion, channel):
         Rx_sig = channels.Rayleigh(Tx_sig, n_var)
     elif channel == 'Rician':
         Rx_sig = channels.Rician(Tx_sig, n_var)
+    elif channel == 'CDL_ZF':
+        Rx_sig = channels.CDL_ZF(Tx_sig, n_var, ch_mat, n_tx, n_rx)
+    elif channel == 'CDL_MMSE':
+        Rx_sig = channels.CDL_MMSE(Tx_sig, n_var, ch_mat, n_tx, n_rx)
     else:
-        raise ValueError("Please choose from AWGN, Rayleigh, and Rician")
+        raise ValueError("Please choose from AWGN, Rayleigh, Rician, CDL-ZF and CDL-MMSE")
 
     channel_dec_output = model.channel_decoder(Rx_sig)
     dec_output = model.decoder(trg_inp, channel_dec_output, look_ahead_mask, src_mask)
@@ -514,7 +515,7 @@ def val_step(model, src, trg, n_var, pad, criterion, channel):
     
     return loss.item()
     
-def greedy_decode(model, src, n_var, max_len, padding_idx, start_symbol, channel):
+def greedy_decode(model, src, n_var, max_len, padding_idx, start_symbol, channel, ch_mat, n_tx, n_rx):
     """ 
     这里采用贪婪解码器，如果需要更好的性能情况下，可以使用beam search decode
     """
@@ -532,9 +533,12 @@ def greedy_decode(model, src, n_var, max_len, padding_idx, start_symbol, channel
         Rx_sig = channels.Rayleigh(Tx_sig, n_var)
     elif channel == 'Rician':
         Rx_sig = channels.Rician(Tx_sig, n_var)
+    elif channel == 'CDL_ZF':
+        Rx_sig = channels.CDL_ZF(Tx_sig, n_var, ch_mat, n_tx, n_rx)
+    elif channel == 'CDL_MMSE':
+        Rx_sig = channels.CDL_MMSE(Tx_sig, n_var, ch_mat, n_tx, n_rx)
     else:
-        raise ValueError("Please choose from AWGN, Rayleigh, and Rician")
-            
+        raise ValueError("Please choose from AWGN, Rayleigh, Rician, CDL-ZF and CDL-MMSE")       
     #channel_enc_output = model.blind_csi(channel_enc_output)
           
     memory = model.channel_decoder(Rx_sig)
