@@ -24,7 +24,9 @@ parser = argparse.ArgumentParser()
 #parser.add_argument('--data-dir', default='data/train_data.pkl', type=str)
 parser.add_argument('--vocab-file', default='europarl/vocab.json', type=str)
 parser.add_argument('--checkpoint-path',
-                    default='checkpoints/deepsc-Rayleigh', type=str)
+                    default='checkpoints/deepsc-CDL-MMSE', type=str)
+parser.add_argument('--mi-checkpoint-path',
+                    default='checkpoints/minet-CDL-MMSE', type=str)
 #parser.add_argument('--channel', default='Rayleigh', type=str,
  #                   help='Please choose AWGN, Rayleigh, Rician or CDL-B')
 #parser.add_argument('--channel', default='Rician', type=str,
@@ -42,8 +44,6 @@ parser.add_argument('--epochs', default=5, type=int) #default is 80
 #addditional arguments for MIMO
 parser.add_argument('--n_rx', default = 2, type = int)
 parser.add_argument('--n_tx', default = 32, type = int)
-#n_rx = 2
-#n_tx = 32
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -98,6 +98,7 @@ def train(epoch, args, net, ch_mat, mi_net=None):
             # mutual information
             mi = train_mi(net, mi_net, sents, 0.1,
                           pad_idx, mi_opt, args.channel, ch_mat, args.n_tx, args.n_rx)
+
             loss = train_step(net, sents, sents, 0.1, pad_idx,
                               optimizer, criterion, args.channel, ch_mat, args.n_tx, args.n_rx, mi_net)
             pbar.set_description(
@@ -105,8 +106,10 @@ def train(epoch, args, net, ch_mat, mi_net=None):
                     epoch + 1, loss, mi
                 )
             )
+            
         else:
             #net = deepsc, pad_idx = <PAD>
+            mi = 10
             loss = train_step(net, sents, sents, noise_std[0], pad_idx,
                               optimizer, criterion, args.channel, ch_mat, args.n_tx, args.n_rx)
             pbar.set_description(
@@ -114,6 +117,9 @@ def train(epoch, args, net, ch_mat, mi_net=None):
                     epoch + 1, loss
                 )
             )
+    return mi
+            
+            
 
 
 if __name__ == '__main__':
@@ -123,9 +129,9 @@ if __name__ == '__main__':
     # Load the the channel matrix if the channel is not AWGN
     Htot = None
     if "CDL" in args.channel:
-        mat_file = sp.loadmat('C:/Users/39392/Desktop/Thesis - Semcom/DeepSC/DeepSC-master/Hmat/H_1.mat')
+        mat_file = sp.loadmat('C:/Users/39392/Desktop/Thesis/DeepSC/DeepSC-master/Hmat/H_1.mat')
         Htot = mat_file['Htot']
-    args.vocab_file = 'C:/Users/39392/Desktop/Thesis - Semcom/DeepSC/DeepSC-master/DeepSC-master/' + args.vocab_file
+    args.vocab_file = 'C:/Users/39392/Desktop/Thesis/DeepSC/DeepSC-master/DeepSC-master/' + args.vocab_file
 
     "args.vocab_file = '/import/antennas/Datasets/hx301/' + args.vocab_file"
     """ preparing the dataset """
@@ -143,6 +149,7 @@ if __name__ == '__main__':
                     args.dff, 0.1).to(device)
     # moves the mi_net model parameters and buffer to the CPU or the GPU
     mi_net = Mine().to(device)
+    
 
     # Loss criterion definition
     criterion = nn.CrossEntropyLoss(reduction='none')
@@ -155,14 +162,17 @@ if __name__ == '__main__':
 
     # parameters initialization
     initNetParams(deepsc)
+    
+    
 
     # Training and validation for each epoch
     for epoch in range(args.epochs):
         start = time.time()
         record_acc = 10
+        record_mi = 10
 
         #train(epoch, args, deepsc)
-        train(epoch, args, deepsc, Htot, mi_net)
+        mi = train(epoch, args, deepsc, Htot, mi_net)
         avg_acc = validate(epoch, args, deepsc, Htot)
 
         # Save the best accuracy score as a "checkpoint"
@@ -172,4 +182,14 @@ if __name__ == '__main__':
             with open(args.checkpoint_path + '/checkpoint_{}.pth'.format(str(epoch + 1).zfill(2)), 'wb') as f:
                 torch.save(deepsc.state_dict(), f)
             record_acc = avg_acc
+        
+        # Save the best accuracy score as a "checkpoint"
+        if mi < record_mi:
+            if not os.path.exists(args.mi_checkpoint_path):
+                os.makedirs(args.mi_checkpoint_path)
+            with open(args.mi_checkpoint_path + '/mi_checkpoint_{}.pth'.format(str(epoch + 1).zfill(2)), 'wb') as f:
+                torch.save(mi_net.state_dict(), f)
+            record_mi = mi
+            
     record_loss = []
+    
