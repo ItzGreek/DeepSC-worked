@@ -20,12 +20,13 @@ from sklearn.preprocessing import normalize
 # from bert4keras.models import build_bert_model
 # from bert4keras.tokenizers import Tokenizer
 from w3lib.html import remove_tags
+import scipy.io as sp
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='europarl/train_data.pkl', type=str)
 parser.add_argument('--vocab-file', default='europarl/vocab.json', type=str)
-parser.add_argument('--checkpoint-path', default='checkpoints/deepsc-Rayleigh', type=str)
-parser.add_argument('--channel', default='Rayleigh', type=str)
+parser.add_argument('--checkpoint-path', default='checkpoints\deepsc-CDL-MMSE', type=str)
+parser.add_argument('--channel', default='CDL_MMSE', type=str)
 parser.add_argument('--MAX-LENGTH', default=30, type=int)
 parser.add_argument('--MIN-LENGTH', default=4, type=int)
 parser.add_argument('--d-model', default=128, type = int)
@@ -37,6 +38,8 @@ parser.add_argument('--epochs', default=2, type = int)
 parser.add_argument('--bert-config-path', default='bert/cased_L-12_H-768_A-12/bert_config.json', type = str)
 parser.add_argument('--bert-checkpoint-path', default='bert/cased_L-12_H-768_A-12/bert_model.ckpt', type = str)
 parser.add_argument('--bert-dict-path', default='bert/cased_L-12_H-768_A-12/vocab.txt', type = str)
+parser.add_argument('--n_rx', default = 2, type = int)
+parser.add_argument('--n_tx', default = 32, type = int)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -57,7 +60,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 #
 #         for (sent1, sent2) in zip(real, predicted):
 #             sent1 = remove_tags(sent1)
-              sent2 = remove_tags(sent2)
+#              sent2 = remove_tags(sent2)
 #
 #             ids1, sids1 = self.tokenizer.encode(sent1)
 #             ids2, sids2 = self.tokenizer.encode(sent2)
@@ -96,10 +99,13 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 #Perofrmance evaluation
-def performance(args, SNR, net):
+def performance(args, SNR, net, file):
     # similarity = Similarity(args.bert_config_path, args.bert_checkpoint_path, args.bert_dict_path)
     #set the weight on 1-grams to 1
     bleu_score_1gram = BleuScore(1, 0, 0, 0)
+    
+    mat_file = sp.loadmat('C:/Users/39392/Desktop/Thesis/DeepSC/DeepSC-master/Hmat/H_1.mat')
+    Htot = mat_file['Htot']
 
     test_eur = EurDataset('test')
     test_iterator = DataLoader(test_eur, batch_size=args.batch_size, num_workers=0,
@@ -127,7 +133,7 @@ def performance(args, SNR, net):
                     target = sents
 
                     out = greedy_decode(net, sents, noise_std, args.MAX_LENGTH, pad_idx,
-                                        start_idx, args.channel)
+                                        start_idx, args.channel, Htot, args.n_tx, args.n_rx)
 
                     sentences = out.cpu().numpy().tolist()
                     result_string = list(map(StoT.sequence_to_text, sentences))
@@ -146,9 +152,15 @@ def performance(args, SNR, net):
                 # 1-gram
                 bleu_score.append(bleu_score_1gram.compute_blue_score(sent1, sent2)) # 7*num_sent
                 # sim_score.append(similarity.compute_similarity(sent1, sent2)) # 7*num_sent
+                #Write TX and RX message in the output file
+                for tx, rx in zip(sent1, sent2):
+                    file.write(f"Transmitted: {tx}\n")
+                    file.write(f"Received: {rx}\n\n")
+                    
             bleu_score = np.array(bleu_score)
             bleu_score = np.mean(bleu_score, axis=1)
             score.append(bleu_score)
+
 
             # sim_score = np.array(sim_score)
             # sim_score = np.mean(sim_score, axis=1)
@@ -163,7 +175,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     #Tested SNRs
     SNR = [0,3,6,9,12,15,18]
-    args.vocab_file = 'C:/Users/39392/Desktop/Thesis - Semcom/DeepSC/DeepSC-master/DeepSC-master/' + args.vocab_file
+    args.vocab_file = 'C:/Users/39392/Desktop/Thesis/DeepSC/DeepSC-master/DeepSC-master/' + args.vocab_file
    
     "args.vocab_file = '/import/antennas/Datasets/hx301/' + args.vocab_file"
     vocab = json.load(open(args.vocab_file, 'rb'))
@@ -194,7 +206,11 @@ if __name__ == '__main__':
     print('model load!')
 
     #bleu computation
-    bleu_score = performance(args, SNR, deepsc)
-    print(bleu_score)
+    with open('bleu_results.txt', 'w') as file:
+       # BLEU computation
+       bleu_score = performance(args, SNR, deepsc, file)
+       file.write(f"BLEU scores: {bleu_score}\n")
 
+    print(bleu_score)
+   
     #similarity.compute_similarity(sent1, real)
