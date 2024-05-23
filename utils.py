@@ -308,7 +308,7 @@ class Channels():
             Second_part = np.linalg.inv(H_eq @ H_herm) #+ (n_var**2)*np.eye(n_rx))
             W_MMSE = H_herm @ Second_part
             
-            if np.linalg.inv(W_MMSE) != 0:
+            if np.linalg.det(W_MMSE) != 0:
                 invertible = True
         
         n0 = (np.random.normal(0, n_var, (n_rx, len(Tx_sig_flat))) + np.random.normal(0, n_var, (n_rx, len(Tx_sig_flat)))*1j)/np.sqrt(2)
