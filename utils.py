@@ -161,38 +161,42 @@ def compl_to_real(mat, n_tx, n_rx):
 #additional function used to compute the channel matrix of the defined CDL channel
 def get_mat(ch_mat, n_tx, n_rx):
     
-    #draw random values for the first 3 dimensions
-    dim1 = random.randint(0, 19999)
-    dim2 = random.randint(0, 29)
-    dim3 = random.randint(0,2)
-    
-    #SISO case
-    if n_tx == 1 and n_rx == 1:
-        dim4 = random.randint(0,1)
-        dim5 = random.randint(0, 31)
+
         
-        values = ch_mat[dim1, dim2, dim3, dim4, dim5]
-        print(values)
-        norm_fact = values*np.conj(values)
-        H_norm = values/norm_fact
-        H = [[np.real(H_norm), -np.imag(H_norm)], [np.imag(H_norm), np.real(H_norm)]]
-        H_inv = np.linalg.inv(H)
-
-        return  torch.Tensor(H).to(device), torch.Tensor(H_inv).to(device)        
-    #MIMo case
-    else:
-        values = ch_mat[dim1, dim2, dim3, :, :n_tx]
-        norm_fact = np.linalg.norm(values, 'fro')
-        H_norm = values/norm_fact
-        #Inverse = np.linalg.inv(H_norm)
+     dim1 = random.randint(0, 19999)
+     dim2 = random.randint(0, 29)
+     dim3 = random.randint(0,2)
+     values = ch_mat[dim1, dim2, dim3, :n_rx, :n_tx]
+     norm_fact = np.linalg.norm(values, 'fro')
+     H_norm = values/norm_fact
+     
+     # Compute the Gram matrix H^H H
+     #gram_mat = H_norm.conj().T @ H_norm
+    
+    # Compute the determinant of the Gram matrix
+    # det = np.linalg.det(H_norm)
         
-        U, S, Vh = np.linalg.svd(H_norm, full_matrices = False)
+     U, S, Vh = np.linalg.svd(H_norm, full_matrices = False)
+        
 
-        return  U, S, Vh, H_norm
-    
-    
-    
+     return  U, S, Vh, H_norm
+     
+output_dir = 'output'
+os.makedirs(output_dir, exist_ok=True)
 
+# Function to compare tensors and save differences to a file
+def save_differences(Tx_array, Rx_sig):
+    # Open a file to append the output in the specified directory
+    output_file = os.path.join(output_dir, 'differences.txt')
+    with open(output_file, 'a') as f:
+        # Iterate over the elements and their indices
+        for index in np.ndindex(Tx_array.shape):
+            # Compare the elements rounded to four decimal places
+            if round(Tx_array[index], 4) != round(Rx_sig[index], 4):
+                # Create the output string
+                output_str = f"Shape {Tx_array.shape}: Rx_sig element{index}: {Rx_sig[index]:.4f}, Tx_array element{index}: {Tx_array[index]:.4f}\n"
+                # Write the output string to the file
+                f.write(output_str)
 class Channels():
 
     def AWGN(self, Tx_sig, n_var):
@@ -278,30 +282,41 @@ class Channels():
     def CDL_MMSE(self, Tx_sig, n_var, ch_mat, n_tx, n_rx):
         
         shape = Tx_sig.shape
-        n_var = 0.001
+        
+        TX_array = Tx_sig.detach().numpy()
         #Get channel matrix + svd
-        _, _, Vh, H = get_mat(ch_mat, n_tx, n_rx)
-        #reshape tx_signal and define real and imaginary parts
-        Tx_sig = Tx_sig.view(shape[0], -1, 2)
-        Tx_sig = Tx_sig.detach().numpy()
-        Tx_sig = np.vectorize(complex)(Tx_sig[:,:,0], Tx_sig[:,:,1])
+        invertible = False
         
-        Tx_sig_flat = Tx_sig.flatten() 
+        while not invertible:
+            _, _, Vh, H = get_mat(ch_mat, n_tx, n_rx)
+            V = np.conj(Vh).T
+            #reshape tx_signal and define real and imaginary parts
+            Tx_sig = Tx_sig.view(shape[0], -1, 2)
+            Tx_sig = Tx_sig.detach().numpy()
+            Tx_sig = np.vectorize(complex)(Tx_sig[:,:,0], Tx_sig[:,:,1])
+            
+            Tx_sig_flat = Tx_sig.flatten() 
+            
+            if n_tx != 1:
+                Tx_sig_exp = np.repeat(Tx_sig_flat[:, np.newaxis], 2, axis=1) #dim: 31744x2
+                x_tx = V @ Tx_sig_exp.T 
+            else:
+                x_tx = V * Tx_sig_flat.T
+                
+            H_eq = H @ V
+            H_herm = np.conj(H_eq).T
+            Second_part = np.linalg.inv(H_eq @ H_herm) #+ (n_var**2)*np.eye(n_rx))
+            W_MMSE = H_herm @ Second_part
+            
+            if np.linalg.cond(W_MMSE) < 1 / np.finfo(W_MMSE.dtype).eps:
+                invertible = True
         
-        Tx_sig_exp = np.repeat(Tx_sig_flat[:, np.newaxis], 2, axis=1) #dim: 31744x2
-        
-        V = np.conj(Vh).T
-        x_tx = V @ Tx_sig_exp.T 
-        H_eq = H @ V
-        H_herm = np.conj(H_eq).T
-        Second_part = np.linalg.inv(H_eq @ H_herm + (n_var**2)*np.eye(n_rx))
-        W_MMSE = H_herm @ Second_part
         n0 = (np.random.normal(0, n_var, (n_rx, len(Tx_sig_flat))) + np.random.normal(0, n_var, (n_rx, len(Tx_sig_flat)))*1j)/np.sqrt(2)
 
-        y = H @ x_tx + n0 
+        y = H @ x_tx #+ n0 
         x_hat = W_MMSE @ y
-        Rx_array = np.round((np.sum(x_hat, axis=0) / 2), decimals = 7)
-        #ratio = Rx_array/Tx_sig_flat
+        Rx_array = np.round((np.sum(x_hat, axis=0) / n_rx), decimals = 7)
+        ratio = Rx_array/Tx_sig_flat
         
         #Reshape the received vector
         #we use half of the multiplication between the second and the third shape values since the original number of symbols was converted to complex values
@@ -313,6 +328,10 @@ class Channels():
         Rx_array = np.stack((real_part, imaginary_part), axis=-1)
         #turn the received array into a tensor
         Rx_sig = torch.tensor(Rx_array).view(shape).to(torch.float32)
+        Rx_sig_ar = Rx_sig.detach().numpy()
+        
+        
+        save_differences(TX_array, Rx_sig_ar)
         
         return Rx_sig
 
