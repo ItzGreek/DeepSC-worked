@@ -159,16 +159,16 @@ def compl_to_real(mat, n_tx, n_rx):
     return H
 
 #additional function used to compute the channel matrix of the defined CDL channel
-def get_mat(ch_mat, n_tx, n_rx):
+#def get_mat(ch_mat, n_tx, n_rx):
     
 
         
-     dim1 = random.randint(0, 19999)
-     dim2 = random.randint(0, 29)
-     dim3 = random.randint(0,2)
-     values = ch_mat[dim1, dim2, dim3, :n_rx, :n_tx]
-     norm_fact = np.linalg.norm(values, 'fro')
-     H_norm = values/norm_fact
+ #    dim1 = random.randint(0, 19999)
+  #   dim2 = random.randint(0, 29)
+  #   dim3 = random.randint(0,2)
+   #  values = ch_mat[dim1, dim2, dim3, :n_rx, :n_tx]
+  #   norm_fact = np.linalg.norm(values, 'fro')
+  #   H_norm = values/norm_fact
      
      # Compute the Gram matrix H^H H
      #gram_mat = H_norm.conj().T @ H_norm
@@ -176,10 +176,32 @@ def get_mat(ch_mat, n_tx, n_rx):
     # Compute the determinant of the Gram matrix
     # det = np.linalg.det(H_norm)
         
-     U, S, Vh = np.linalg.svd(H_norm, full_matrices = False)
+   #  U, S, Vh = np.linalg.svd(H_norm, full_matrices = False)
         
 
-     return  U, S, Vh, H_norm
+   #  return  U, S, Vh, H_norm
+ 
+def get_mat(ch_mat, n_tx, n_rx):
+    dim1 = random.randint(0, 19999)
+    dim2 = random.randint(0, 29)
+    dim3 = random.randint(0, 2)
+    
+    # Extract the submatrix from the channel matrix
+    values = ch_mat[dim1, dim2, dim3, :n_rx, :n_tx]
+    
+    # Convert to PyTorch tensor and move to the specified device
+    values = torch.tensor(values, dtype=torch.complex64).to(device)
+    
+    # Compute the Frobenius norm
+    norm_fact = torch.linalg.norm(values, 'fro')
+    
+    # Normalize the matrix
+    H_norm = values / norm_fact
+    
+    # Perform Singular Value Decomposition (SVD)
+    U, S, Vh = torch.linalg.svd(H_norm, full_matrices=False)
+    
+    return U, S, Vh, H_norm
      
 output_dir = 'output'
 os.makedirs(output_dir, exist_ok=True)
@@ -227,7 +249,6 @@ class Channels():
         Rx_sig = self.AWGN(Tx_sig, n_var)
         # Channel estimation
         Rx_sig = torch.matmul(Rx_sig, torch.inverse(H)).view(shape)
-        print(Rx_sig)
 
         return Rx_sig
 
@@ -283,55 +304,64 @@ class Channels():
         
         shape = Tx_sig.shape
         
-        TX_array = Tx_sig.detach().numpy()
         #Get channel matrix + svd
         invertible = False
         
         while not invertible:
             _, _, Vh, H = get_mat(ch_mat, n_tx, n_rx)
-            V = np.conj(Vh).T
+            V = torch.conj(Vh).T.to(device)
             #reshape tx_signal and define real and imaginary parts
             Tx_sig = Tx_sig.view(shape[0], -1, 2)
-            Tx_sig = Tx_sig.detach().numpy()
-            Tx_sig = np.vectorize(complex)(Tx_sig[:,:,0], Tx_sig[:,:,1])
+            Tx_sig = torch.view_as_complex(Tx_sig)
             
-            Tx_sig_flat = Tx_sig.flatten() 
+            Tx_sig_flat = Tx_sig.view(-1)
             
             if n_tx != 1:
-                Tx_sig_exp = np.repeat(Tx_sig_flat[:, np.newaxis], 2, axis=1) #dim: 31744x2
-                x_tx = V @ Tx_sig_exp.T 
+                Tx_sig_exp = Tx_sig_flat.unsqueeze(1).repeat(1, 2).to(device) # Change to unsqueeze and repeat for correct dimensions
+                x_tx = torch.matmul(V, Tx_sig_exp.T)
             else:
-                x_tx = V * Tx_sig_flat.T
-                
-            H_eq = H @ V
-            H_herm = np.conj(H_eq).T
-            Second_part = np.linalg.inv(H_eq @ H_herm) #+ (n_var**2)*np.eye(n_rx))
-            W_MMSE = H_herm @ Second_part
+                x_tx = V * Tx_sig_flat
             
-            if np.linalg.det(W_MMSE) != 0:
+            H_eq = torch.matmul(H, V)
+            H_herm = torch.conj(H_eq).T
+            eye = torch.eye(n_rx, dtype=torch.complex64).to(device)
+            second_part = torch.inverse(torch.matmul(H_eq, H_herm) + (n_var**2) * eye)
+            W_MMSE = torch.matmul(H_herm, second_part)
+            
+            
+            if torch.linalg.det(W_MMSE).abs() != 0:
                 invertible = True
         
-        n0 = (np.random.normal(0, n_var, (n_rx, len(Tx_sig_flat))) + np.random.normal(0, n_var, (n_rx, len(Tx_sig_flat)))*1j)/np.sqrt(2)
+        n0_real = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
+        n0_imag = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
+        n0 = (n0_real + 1j * n0_imag) / torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device)
 
-        y = H @ x_tx #+ n0 
-        x_hat = W_MMSE @ y
-        Rx_array = np.round((np.sum(x_hat, axis=0) / n_rx), decimals = 7)
-        ratio = Rx_array/Tx_sig_flat
+        
+        y = torch.matmul(H, x_tx) + n0 
+        x_hat = torch.matmul(W_MMSE, y)
+        #Rx_array = torch.round(torch.sum(x_hat, dim=0) / n_rx, decimals=7)
+        
+        #Torch non supporta il rounding dei numeri complessi, quindi è necessario computarlo separatamente per la parte immaginaria e reale
+        Rx_array = torch.sum(x_hat, dim=0) / n_rx
+        
+        real_part = torch.round(Rx_array.real, decimals=7)
+        imag_part = torch.round(Rx_array.imag, decimals=7)
+        Rx_array = torch.complex(real_part, imag_part)
+        
+        #ratio = Rx_array/Tx_sig_flat
         
         #Reshape the received vector
         #we use half of the multiplication between the second and the third shape values since the original number of symbols was converted to complex values
-        Rx_array = Rx_array.reshape((shape[0],int(shape[1]*shape[2]/2))) 
-        real_part = np.real(Rx_array)
-        imaginary_part = np.imag(Rx_array)
+        Rx_array = Rx_array.view(shape[0], int(shape[1] * shape[2] / 2))
+        real_part = Rx_array.real
+        imaginary_part = Rx_array.imag
+    
+        Rx_array = torch.stack((real_part, imaginary_part), dim=-1)
+        Rx_sig = Rx_array.view(shape)
+        #.to(torch.float32)
         
         
-        Rx_array = np.stack((real_part, imaginary_part), axis=-1)
-        #turn the received array into a tensor
-        Rx_sig = torch.tensor(Rx_array).view(shape).to(torch.float32)
-        Rx_sig_ar = Rx_sig.detach().numpy()
-        
-        
-        save_differences(TX_array, Rx_sig_ar)
+        #save_differences(TX_array, Rx_sig_ar)
         
         return Rx_sig
 
