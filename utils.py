@@ -425,7 +425,12 @@ def SNR_to_noise(snr):
 
     return noise_std
 
-def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_tx, n_rx, mi_net=None):
+def noise_to_SNR(noise_std):
+    snr = 1 / (noise_std**2)
+    snr = 10*np.log10(snr)
+    return snr
+
+def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_tx, n_rx, mi_net=None, lambda_loss=0.0009 ):
     
     #removes the last element from each batch line
     trg_inp = trg[:, :-1]
@@ -467,7 +472,7 @@ def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_t
     #y_est = x +  torch.matmul(n, torch.inverse(H))
     #loss1 = torch.mean(torch.pow((x_est - y_est.view(x_est.shape)), 2))
 
-    loss = loss_function(pred.contiguous().view(-1, ntokens), 
+    loss_ce = loss_function(pred.contiguous().view(-1, ntokens), 
                          trg_real.contiguous().view(-1), 
                          pad, criterion)
 
@@ -477,13 +482,13 @@ def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_t
         joint, marginal = sample_batch(Tx_sig, Rx_sig)
         mi_lb, _, _ = mutual_information(joint, marginal, mi_net)
         loss_mine = -mi_lb
-        loss = loss + 0.0009 * loss_mine
+        loss = loss_ce + lambda_loss* loss_mine
     # loss = loss_function(pred, trg_real, pad)
 
     loss.backward()
     opt.step()
 
-    return loss.item()
+    return loss.item(), loss_ce.item(), lambda_loss*loss_mine, src[0], pred[0]
 
 
 def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx, n_rx):
@@ -523,7 +528,10 @@ def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx,
     torch.nn.utils.clip_grad_norm_(mi_net.parameters(), 10.0)
     #updated network parameters through the optimizer
     opt.step()
-
+    ### DEBUG ###  
+    if math.isinf(loss_mine.item()):
+        print(f"Mutual information is infinite:{loss_mine.item()} ")
+    ### END DEBUG ###  
     #returns mutual information loss
     return loss_mine.item()
 

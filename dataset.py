@@ -14,7 +14,7 @@ from torch.utils.data import Dataset
 
 class EurDataset(Dataset):
     def __init__(self, split='train'):
-        data_dir = 'C:/Users/39392/Desktop/Thesis - Semcom/DeepSC/DeepSC-master/DeepSC-master/'
+        data_dir = '/home/man2mob/PythonStuff/DeepSC/data/'
         #data_dir = '/import/antennas/Datasets/hx301/'
         with open(data_dir + 'europarl/{}_data.pkl'.format(split), 'rb') as f:
             self.data = pickle.load(f)
