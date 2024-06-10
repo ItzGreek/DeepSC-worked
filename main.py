@@ -23,16 +23,16 @@ import scipy.io as sp
 parser = argparse.ArgumentParser()
 #parser.add_argument('--data-dir', default='data/train_data.pkl', type=str)
 parser.add_argument('--vocab-file', default='europarl/vocab.json', type=str)
+parser.add_argument('--channel', default='CDL_MMSE', type=str,
+                    help='Please choose AWGN, Rayleigh, Rician, CDL_ZF or CDL_MMSE')
 parser.add_argument('--checkpoint-path',
-                    default='checkpoints/deepsc-CDL-MMSE', type=str)
+                    default=f'checkpoints/deepsc-{parser.parse_args().channel}', type=str)
 parser.add_argument('--mi-checkpoint-path',
-                    default='checkpoints/minet-CDL-MMSE', type=str)
+                    default=f'checkpoints/minet--{parser.parse_args().channel}', type=str)
 #parser.add_argument('--channel', default='Rayleigh', type=str,
  #                   help='Please choose AWGN, Rayleigh, Rician or CDL-B')
 #parser.add_argument('--channel', default='Rician', type=str,
  #                   help='Please choose AWGN, Rayleigh, Rician or CDL-B')
-parser.add_argument('--channel', default='CDL_MMSE', type=str,
-                    help='Please choose AWGN, Rayleigh, Rician, CDL_ZF or CDL_MMSE')
 parser.add_argument('--MAX-LENGTH', default=30, type=int)
 parser.add_argument('--MIN-LENGTH', default=4, type=int)
 parser.add_argument('--d-model', default=128, type=int)
@@ -105,7 +105,7 @@ def train(epoch, args, net, ch_mat, mi_net=None):
     # retrieve the noise standard deviation
     noise_std = np.random.uniform(SNR_to_noise(5), SNR_to_noise(10), size=(1))
 
-   # noise_std[0] = 0.1 #DEBUG DELETEME!!!   
+    noise_std[0] = 0.1 #DEBUG DELETEME!!!   
     count=0
     for sents in pbar:
         count+=1

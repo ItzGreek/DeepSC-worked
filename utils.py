@@ -196,7 +196,7 @@ def get_mat(ch_mat, n_tx, n_rx):
     norm_fact = torch.linalg.norm(values, 'fro')
     
     # Normalize the matrix
-    H_norm = values / norm_fact
+    H_norm = torch.sqrt(torch.tensor(n_rx).to(device))*values / norm_fact
     
     # Perform Singular Value Decomposition (SVD)
     U, S, Vh = torch.linalg.svd(H_norm, full_matrices=False)
@@ -303,6 +303,8 @@ class Channels():
     def CDL_MMSE(self, Tx_sig, n_var, ch_mat, n_tx, n_rx):
         
         shape = Tx_sig.shape
+        power_tx_sig = torch.mean(torch.abs(Tx_sig ** 2))
+        print(f"La potenza di Tx_sig è: {power_tx_sig.item()}")
         
         #Get channel matrix + svd
         invertible = False
@@ -312,9 +314,12 @@ class Channels():
             V = torch.conj(Vh).T.to(device)
             #reshape tx_signal and define real and imaginary parts
             Tx_sig = Tx_sig.view(shape[0], -1, 2)
-            Tx_sig = torch.view_as_complex(Tx_sig)
+            Tx_sig = torch.view_as_complex(Tx_sig)/(torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device))
+
             
             Tx_sig_flat = Tx_sig.view(-1)
+            power_tx_sig_flat = torch.mean(torch.abs(Tx_sig_flat ** 2))
+            print(f"La potenza di Tx_sig_flat (segnale senza precoding) è: {power_tx_sig_flat.item()}")           
             
             if n_tx != 1:
                 Tx_sig_exp = Tx_sig_flat.unsqueeze(1).repeat(1, 2).to(device) # Change to unsqueeze and repeat for correct dimensions
@@ -329,14 +334,26 @@ class Channels():
             W_MMSE = torch.matmul(H_herm, second_part)
             
             
+            
             if torch.linalg.det(W_MMSE).abs() != 0:
                 invertible = True
-        
+
+        power_x_tx = torch.mean(torch.abs(x_tx) ** 2)
+        print(f"La potenza del segnale utile con precodifica (x_tx) è: {power_x_tx.item()}")        
+
+
         n0_real = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
         n0_imag = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
         n0 = (n0_real + 1j * n0_imag) / torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device)
 
-        
+
+        power_n0 = torch.mean(torch.abs(n0) ** 2)
+        print(f"La potenza del segnale del rumore (n0) è: {power_n0.item()}")
+
+        power_sigutil = torch.mean(torch.abs(torch.matmul(H, x_tx)) ** 2)
+        print(f"La potenza del segnale utile  (H*x_tx) è: {power_sigutil.item()}")
+
+
         y = torch.matmul(H, x_tx) + n0 
         x_hat = torch.matmul(W_MMSE, y)
         #Rx_array = torch.round(torch.sum(x_hat, dim=0) / n_rx, decimals=7)
@@ -407,9 +424,9 @@ def PowerNormalize(x):
     
     x_square = torch.mul(x, x)
     power = torch.mean(x_square).sqrt()
-    if power > 1:
-        x = torch.div(x, power)
-    
+   # if power > 1:
+   #     x = torch.div(x, power)
+    x = torch.div(x, power)    
     return x
 
 
@@ -461,6 +478,15 @@ def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_t
         Rx_sig = channels.CDL_MMSE(Tx_sig, n_var, ch_mat, n_tx, n_rx)
     else:
         raise ValueError("Please choose from AWGN, Rayleigh, and Rician")
+    
+    diff_sig = Tx_sig - Rx_sig
+    plt.plot(diff_sig.flatten().to("cpu").detach().numpy())
+    plt.show()
+    plt.grid()
+    power_diff_sig = torch.mean(torch.abs(diff_sig)**2)
+    print(f"La potenza di diff_sig è: {power_diff_sig.item()}")           
+
+
 
     channel_dec_output = model.channel_decoder(Rx_sig)
     #calls the decoder forward step
