@@ -165,9 +165,17 @@ if __name__ == '__main__':
     # Load the the channel matrix if the channel is not AWGN
     Htot = None
     if "CDL" in args.channel:
-        mat_file = sp.loadmat('/home/man2mob/PythonStuff/DeepSC/Hmat/H_1.mat')
-        Htot = mat_file['Htot']
-    args.vocab_file = '/home/man2mob/PythonStuff/DeepSC/data/' + args.vocab_file
+        try:
+            mat_file = sp.loadmat('/home/man2mob/PythonStuff/DeepSC/Hmat/H_1.mat')
+            Htot = mat_file['Htot']
+            args.vocab_file = '/home/man2mob/PythonStuff/DeepSC/data/' + args.vocab_file
+        except FileNotFoundError:
+            try:
+                mat_file = sp.loadmat('C:/Users/39392/Desktop/Thesis/DeepSC/DeepSC-master/Hmat/H_1.mat')
+                Htot = mat_file['Htot']
+                args.vocab_file = 'C:/Users/39392/Desktop/Thesis/DeepSC/DeepSC-master/DeepSC-master/' + args.vocab_file
+            except FileNotFoundError:
+                raise EnvironmentError('Missing Path')
 
     "args.vocab_file = '/import/antennas/Datasets/hx301/' + args.vocab_file"
     """ preparing the dataset """
