@@ -27,7 +27,7 @@ import spacy
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='europarl/train_data.pkl', type=str)
 parser.add_argument('--vocab-file', default='europarl/vocab.json', type=str)
-parser.add_argument('--checkpoint-path', default='checkpoints/20240618-deepsc-CDL_MMSE2x2-300epoch/', type=str)
+parser.add_argument('--checkpoint-path', default='checkpoints/20240620-deepsc-CDL_MMSE2x2_singlelayer_80epoch/', type=str)
 parser.add_argument('--channel', default='CDL_MMSE', type=str)
 parser.add_argument('--MAX-LENGTH', default=30, type=int)
 parser.add_argument('--MIN-LENGTH', default=4, type=int)
@@ -104,20 +104,19 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 class Similarity():
     def __init__(self):
         spacy.prefer_gpu()
-        self.nlp = spacy.load("en_core_web_sm")
+       # self.nlp = spacy.load("en_core_web_sm")
+        self.nlp = spacy.load("en_core_web_lg")
 
     def compute_similarity(self, real_list, predicted_list):
         
-        similarity_score = np.zeros(len(real_list)) 
-        index = 0
+        similarity_score = []  
         for real, predicted in zip(real_list, predicted_list):
             doc1 = self.nlp(real)
             doc2 = self.nlp(predicted)
 
             # Calculate similarity
-            similarity_score[index]   = doc1.similarity(doc2)
-            index +=1
-        return similarity_score.mean()
+            similarity_score.append(doc1.similarity(doc2))
+        return similarity_score
 
 #Perofrmance evaluation
 def performance(args, SNR, net, file):
@@ -170,14 +169,18 @@ def performance(args, SNR, net, file):
 
             bleu_score = []
             sim_score = []
-            for sent1, sent2 in zip(Tx_word, Rx_word):
+            count = 0
+            for sent1, sent2 in tqdm(zip(Tx_word, Rx_word), total=len(Tx_word)):
                 # 1-gram
                 bleu_score.append(bleu_score_1gram.compute_blue_score(sent1, sent2)) # 7*num_sent
                 sim_score.append(similarity.compute_similarity(sent1, sent2)) # 7*num_sent
                 #Write TX and RX message in the output file
+                file.write(f"**************  SNR: {SNR[count]} dB  **************\n")
                 for tx, rx in zip(sent1, sent2):
                     file.write(f"Transmitted: {tx}\n")
                     file.write(f"Received: {rx}\n\n")
+                file.write("\n\n")
+                count += 1
                     
             bleu_score = np.array(bleu_score)
             bleu_score = np.mean(bleu_score, axis=1)
@@ -188,10 +191,10 @@ def performance(args, SNR, net, file):
             sim_score = np.mean(sim_score, axis=1)
             score2.append(sim_score)
 
-    score1 = np.mean(np.array(score), axis=0)
-    score2 = np.mean(np.array(score2), axis=0)
+    bleu_scores = np.mean(np.array(score), axis=0)
+    sim_scores = np.mean(np.array(score2), axis=0)
 
-    return score1, score2
+    return bleu_scores, sim_scores
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -232,6 +235,7 @@ if __name__ == '__main__':
        # BLEU computation
        bleu_score, similarity_score = performance(args, SNR, deepsc, file)
        file.write(f"BLEU scores: {bleu_score}\n")
+       file.write(f"Similarity scores: {similarity_score}\n")
 
     print(f"bleu_score: {bleu_score} \nsimilarity_score: {similarity_score}   ")
    
