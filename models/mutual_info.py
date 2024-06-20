@@ -25,12 +25,10 @@ class Mine(nn.Module):
         x = F.relu(x)
         x = self.dense2(x)
         x = F.relu(x)
-        ### DEBUG ###  
         # output = self.dense3(x)
         x = self.dense3(x)
         output = 70*torch.tanh(x/70) #limit the output to avoid Inf when the output of the network is used for the computation of an exponential  
 
-        ### END DEBUG ###  
         return output
 
 def linear(in_dim, out_dim, bias=True):
@@ -46,10 +44,8 @@ def mutual_information(joint, marginal, mine_net):
     t = mine_net(joint)
     et = torch.exp(mine_net(marginal))
     mi_lb = torch.mean(t) - torch.log(torch.mean(et))
-    ### DEBUG ###  
     if math.isinf(mi_lb.item()):
         print(f"Mutual information is infiite:{mi_lb.item()} ")
-    ###  END DEBUG ### 
     return mi_lb, t, et
 
 
