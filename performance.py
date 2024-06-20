@@ -21,6 +21,8 @@ from sklearn.preprocessing import normalize
 # from bert4keras.tokenizers import Tokenizer
 from w3lib.html import remove_tags
 import scipy.io as sp
+import spacy
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='europarl/train_data.pkl', type=str)
@@ -97,10 +99,30 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 #
 #         return score
 
+# define similarity using spacy library instead of bertmodel
+
+class Similarity():
+    def __init__(self):
+        spacy.prefer_gpu()
+        self.nlp = spacy.load("en_core_web_sm")
+
+    def compute_similarity(self, real_list, predicted_list):
+        
+        similarity_score = np.zeros(len(real_list)) 
+        index = 0
+        for real, predicted in zip(real_list, predicted_list):
+            doc1 = self.nlp(real)
+            doc2 = self.nlp(predicted)
+
+            # Calculate similarity
+            similarity_score[index]   = doc1.similarity(doc2)
+            index +=1
+        return similarity_score.mean()
 
 #Perofrmance evaluation
 def performance(args, SNR, net, file):
     # similarity = Similarity(args.bert_config_path, args.bert_checkpoint_path, args.bert_dict_path)
+    similarity = Similarity()
     #set the weight on 1-grams to 1
     bleu_score_1gram = BleuScore(1, 0, 0, 0)
     
@@ -143,15 +165,15 @@ def performance(args, SNR, net, file):
                     result_string = list(map(StoT.sequence_to_text, target_sent))
                     target_word = target_word + result_string
 
-                Tx_word.append(word)
-                Rx_word.append(target_word)
+                Tx_word.append(target_word)
+                Rx_word.append(word)
 
             bleu_score = []
             sim_score = []
             for sent1, sent2 in zip(Tx_word, Rx_word):
                 # 1-gram
                 bleu_score.append(bleu_score_1gram.compute_blue_score(sent1, sent2)) # 7*num_sent
-                # sim_score.append(similarity.compute_similarity(sent1, sent2)) # 7*num_sent
+                sim_score.append(similarity.compute_similarity(sent1, sent2)) # 7*num_sent
                 #Write TX and RX message in the output file
                 for tx, rx in zip(sent1, sent2):
                     file.write(f"Transmitted: {tx}\n")
@@ -162,14 +184,14 @@ def performance(args, SNR, net, file):
             score.append(bleu_score)
 
 
-            # sim_score = np.array(sim_score)
-            # sim_score = np.mean(sim_score, axis=1)
-            # score2.append(sim_score)
+            sim_score = np.array(sim_score)
+            sim_score = np.mean(sim_score, axis=1)
+            score2.append(sim_score)
 
     score1 = np.mean(np.array(score), axis=0)
-    # score2 = np.mean(np.array(score2), axis=0)
+    score2 = np.mean(np.array(score2), axis=0)
 
-    return score1#, score2
+    return score1, score2
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -206,11 +228,11 @@ if __name__ == '__main__':
     print('model load!')
 
     #bleu computation
-    with open('bleu_results.txt', 'w') as file:
+    with open('performance_results.txt', 'w') as file:
        # BLEU computation
-       bleu_score = performance(args, SNR, deepsc, file)
+       bleu_score, similarity_score = performance(args, SNR, deepsc, file)
        file.write(f"BLEU scores: {bleu_score}\n")
 
-    print(bleu_score)
+    print(f"bleu_score: {bleu_score} \nsimilarity_score: {similarity_score}   ")
    
-    #similarity.compute_similarity(sent1, real)
+   # similarity.compute_similarity(sent1, real)
