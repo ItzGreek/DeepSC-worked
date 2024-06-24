@@ -11,6 +11,7 @@ import torch
 import time
 import torch.nn as nn
 import numpy as np
+import pandas as pd
 from w3lib.html import remove_tags
 from nltk.translate.bleu_score import sentence_bleu
 from models.mutual_info import sample_batch, mutual_information
@@ -221,34 +222,130 @@ def save_differences(Tx_array, Rx_sig):
                 f.write(output_str)
 class Channels():
 
-    def AWGN(self, Tx_sig, n_var):
+    def AWGN(self, Tx_sig, n_var, n_tx, n_rx):
         Rx_sig = Tx_sig + torch.normal(0, n_var, size=Tx_sig.shape).to(device)
         return Rx_sig
 
-    def Rayleigh(self, Tx_sig, n_var):
+    def Rayleigh(self, Tx_sig, n_var, n_rx, n_tx):
         shape = Tx_sig.shape
-        H_real = torch.normal(0, math.sqrt(1/2), size=[1]).to(device)
-        H_imag = torch.normal(0, math.sqrt(1/2), size=[1]).to(device)
-        H = torch.Tensor([[H_real, -H_imag], [H_imag, H_real]]).to(device)
-        Tx_sig = torch.matmul(Tx_sig.view(shape[0], -1, 2), H)
-        Rx_sig = self.AWGN(Tx_sig, n_var)
-        # Channel estimation  
-        Rx_sig = torch.matmul(Rx_sig, torch.inverse(H)).view(shape)
+        power_txsig = torch.mean(torch.abs(Tx_sig) ** 2)
+        print(f"La potenza del segnale trasmesso Tx_sig è: {power_txsig.item()}")
+        Tx_sig = Tx_sig.view(shape[0], -1, 2)
+        Tx_sig = torch.view_as_complex(Tx_sig)/(torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device))
+        power_txsig = torch.mean(torch.abs(Tx_sig) ** 2)
+        print(f"La potenza del segnale trasmesso Tx_sig_norm è: {power_txsig.item()}")
+ 
+        Tx_sig_flat = Tx_sig.view(-1)
         
+        #H_real = torch.normal(0, math.sqrt(1/2), size=[1]).to(device)
+        #H_imag = torch.normal(0, math.sqrt(1/2), size=[1]).to(device)
+        #H = torch.Tensor([[H_real, -H_imag], [H_imag, H_real]]).to(device)
+        H_real = torch.normal(0, math.sqrt(1/2), size=[n_rx, n_tx]).to(device)
+        H_imag = torch.normal(0, math.sqrt(1/2), size=[n_rx, n_tx]).to(device)
+        H = H_real + 1j * H_imag
+        
+        norm_fact = torch.linalg.norm(H, 'fro')
+        
+        # Normalize the matrix
+        H = torch.sqrt(torch.tensor(n_rx).to(device))*H / norm_fact
+        
+        n0_real = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
+        n0_imag = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
+        n0 = (n0_real + 1j * n0_imag) / torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device)
+        
+        
+        if n_tx != 1:
+           # Tx_sig_exp = Tx_sig_flat.unsqueeze(1).repeat(1, min(n_tx,n_rx)).to(device) # Change to unsqueeze and repeat for each layer for correct dimensions
+          #  x_tx = torch.matmul(V, Tx_sig_exp.T)
+           # convert V in a column vector
+            x_tx = torch.matmul(torch.ones((2,1), dtype=torch.complex64).to(device), Tx_sig_flat.view(1,-1))
+            power_xtx = torch.mean(torch.abs(x_tx) ** 2)
+            print(f"La potenza del segnale x_tx è: {power_xtx.item()}")
+            y = torch.matmul(H, x_tx)# + n0 
+            power_sigutil = torch.mean(torch.abs(torch.matmul(H, x_tx)) ** 2)
+            print(f"La potenza del segnale utile  (H*x_tx) è: {power_sigutil.item()}")
+        else:
+            x_tx = Tx_sig_flat.view(1,-1)
+            y = H*x_tx + n0 
+            
+        #Tx_sig = torch.matmul(Tx_sig.view(shape[0], -1, 2), H)
+        #Rx_sig = self.AWGN(Tx_sig, n_var)
+        # Channel estimation
+        Rx_array = torch.matmul(torch.inverse(H), y)
+        power_rxsig = torch.mean(torch.abs(Rx_array) ** 2)
+        print(f"La potenza del segnale trasmesso Rx_array è: {power_rxsig.item()}")
+        Rx_array = torch.sum(Rx_array, dim = 0) / torch.tensor(n_rx).to(device)
+        power_rxsig = torch.mean(torch.abs(Rx_array) ** 2)
+        print(f"La potenza del segnale trasmesso Rx_array post divisione è: {power_rxsig.item()}")
+
+        Rx_array = Rx_array.view(shape[0], int(shape[1] * shape[2] / 2))
+        real_part = Rx_array.real*torch.sqrt(torch.tensor(2.0, dtype=torch.float32))  
+        imaginary_part = Rx_array.imag*torch.sqrt(torch.tensor(2.0, dtype=torch.float32))
+    
+        Rx_array = torch.stack((real_part, imaginary_part), dim=-1)
+        Rx_sig = Rx_array.view(shape)
+        power_rxsig = torch.mean(torch.abs(Rx_sig) ** 2)
+        print(f"La potenza del segnale Rx_sig è: {power_rxsig.item()}")
+        
+        #Rx_sig = torch.matmul(Rx_sig, torch.inverse(H)).view(shape)
+
         return Rx_sig
         
         
-    def Rician(self, Tx_sig, n_var, K=1):
+    def Rician(self, Tx_sig, n_var, n_tx, n_rx, K=1):
         shape = Tx_sig.shape
+        
+        Tx_sig = Tx_sig.view(shape[0], -1, 2)
+        Tx_sig = torch.view_as_complex(Tx_sig)/(torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device))
+ 
+        Tx_sig_flat = Tx_sig.view(-1)
+        
         mean = math.sqrt(K / (K + 1))
         std = math.sqrt(1 / (K + 1))
-        H_real = torch.normal(mean, std, size=[1]).to(device)
-        H_imag = torch.normal(mean, std, size=[1]).to(device)
-        H = torch.Tensor([[H_real, -H_imag], [H_imag, H_real]]).to(device)
-        Tx_sig = torch.matmul(Tx_sig.view(shape[0], -1, 2), H)
-        Rx_sig = self.AWGN(Tx_sig, n_var)
+        #H_real = torch.normal(mean, std, size=[1]).to(device)
+        #H_imag = torch.normal(mean, std, size=[1]).to(device)
+        #H = torch.Tensor([[H_real, -H_imag], [H_imag, H_real]]).to(device)
+        H_real = torch.normal(mean, std, size=[n_rx, n_tx]).to(device)
+        H_imag = torch.normal(mean, std, size=[n_rx, n_tx]).to(device)
+        H = H_real + 1j * H_imag
+        
+        norm_fact = torch.linalg.norm(H, 'fro')
+        
+        # Normalize the matrix
+        H = torch.sqrt(torch.tensor(n_rx).to(device))*H / norm_fact
+        
+        n0_real = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
+        n0_imag = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
+        n0 = (n0_real + 1j * n0_imag) / torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device)
+        
+        
+        if n_tx != 1:
+           # Tx_sig_exp = Tx_sig_flat.unsqueeze(1).repeat(1, min(n_tx,n_rx)).to(device) # Change to unsqueeze and repeat for each layer for correct dimensions
+          #  x_tx = torch.matmul(V, Tx_sig_exp.T)
+           # convert V in a column vector
+            x_tx = torch.matmul(torch.ones((2,1), dtype=torch.complex64).to(device), Tx_sig_flat.view(1,-1))
+            y = torch.matmul(H, x_tx) #+ n0 
+            power_sigutil = torch.mean(torch.abs(torch.matmul(H, x_tx)) ** 2)
+            print(f"La potenza del segnale utile  (H*x_tx) è: {power_sigutil.item()}")
+
+        else:
+            x_tx = Tx_sig_flat.view(1,-1)
+            y = H*x_tx + n0 
+            
+        #Tx_sig = torch.matmul(Tx_sig.view(shape[0], -1, 2), H)
+        #Rx_sig = self.AWGN(Tx_sig, n_var)
         # Channel estimation
-        Rx_sig = torch.matmul(Rx_sig, torch.inverse(H)).view(shape)
+        Rx_array = torch.matmul(torch.inverse(H), y)
+        Rx_array = torch.sum(Rx_array, dim = 0) / torch.tensor(n_rx).to(device)
+
+        Rx_array = Rx_array.view(shape[0], int(shape[1] * shape[2] / 2))
+        real_part = Rx_array.real*torch.sqrt(torch.tensor(2.0, dtype=torch.float32))  
+        imaginary_part = Rx_array.imag*torch.sqrt(torch.tensor(2.0, dtype=torch.float32))
+    
+        Rx_array = torch.stack((real_part, imaginary_part), dim=-1)
+        Rx_sig = Rx_array.view(shape)
+        
+        #Rx_sig = torch.matmul(Rx_sig, torch.inverse(H)).view(shape)
 
         return Rx_sig
 
@@ -303,75 +400,132 @@ class Channels():
     def CDL_MMSE(self, Tx_sig, n_var, ch_mat, n_tx, n_rx):
         
         shape = Tx_sig.shape
-        power_tx_sig = torch.mean(torch.abs(Tx_sig ** 2))
-        print(f"La potenza di Tx_sig è: {power_tx_sig.item()}")
+        #power_tx_sig = torch.mean(torch.abs(Tx_sig ** 2))
+        ### DEBUG
+       # print(f"La potenza di Tx_sig è: {power_tx_sig.item()}")
         
         #Get channel matrix + svd
-        invertible = False
+        #invertible = False
         
-        while not invertible:
-            _, _, Vh, H = get_mat(ch_mat, n_tx, n_rx)
-            V = torch.conj(Vh).T.to(device)
-            #reshape tx_signal and define real and imaginary parts
-            Tx_sig = Tx_sig.view(shape[0], -1, 2)
-            Tx_sig = torch.view_as_complex(Tx_sig)/(torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device))
+       # while not invertible:
+        _, S, Vh, H = get_mat(ch_mat, n_tx, n_rx)
+        V = torch.conj(Vh[0,:]).T.to(device)
+        #reshape tx_signal and define real and imaginary parts
+        Tx_sig = Tx_sig.view(shape[0], -1, 2)
+        Tx_sig = torch.view_as_complex(Tx_sig)/(torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device))
 
-            
-            Tx_sig_flat = Tx_sig.view(-1)
-            power_tx_sig_flat = torch.mean(torch.abs(Tx_sig_flat ** 2))
-            print(f"La potenza di Tx_sig_flat (segnale senza precoding) è: {power_tx_sig_flat.item()}")           
-            
-            if n_tx != 1:
-                Tx_sig_exp = Tx_sig_flat.unsqueeze(1).repeat(1, 2).to(device) # Change to unsqueeze and repeat for correct dimensions
-                x_tx = torch.matmul(V, Tx_sig_exp.T)
-            else:
-                x_tx = V * Tx_sig_flat
-            
-            H_eq = torch.matmul(H, V)
-            H_herm = torch.conj(H_eq).T
-            eye = torch.eye(n_rx, dtype=torch.complex64).to(device)
-            second_part = torch.inverse(torch.matmul(H_eq, H_herm) + (n_var**2) * eye)
-            W_MMSE = torch.matmul(H_herm, second_part)
-            
-            
-            
-            if torch.linalg.det(W_MMSE).abs() != 0:
-                invertible = True
-
-        power_x_tx = torch.mean(torch.abs(x_tx) ** 2)
-        print(f"La potenza del segnale utile con precodifica (x_tx) è: {power_x_tx.item()}")        
-
-
+        
+        Tx_sig_flat = Tx_sig.view(-1)
+        ### DEBUG
+       # power_tx_sig_flat = torch.mean(torch.abs(Tx_sig_flat ** 2))
+       # print(f"La potenza di Tx_sig_flat (segnale senza precoding) è: {power_tx_sig_flat.item()}")    
+        
         n0_real = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
         n0_imag = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
         n0 = (n0_real + 1j * n0_imag) / torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device)
+               
+        
+        if n_tx != 1:
+           # Tx_sig_exp = Tx_sig_flat.unsqueeze(1).repeat(1, min(n_tx,n_rx)).to(device) # Change to unsqueeze and repeat for each layer for correct dimensions
+          #  x_tx = torch.matmul(V, Tx_sig_exp.T)
+           # convert V in a column vector
+            V = V.view(-1,1) 
+            x_tx = torch.matmul(V, Tx_sig_flat.view(1,-1))
+            H_eq = torch.matmul(H, V)
+            H_herm = torch.conj(H_eq).T
+            eye = torch.eye(H_eq.shape[1] , dtype=torch.complex64).to(device)
+            second_part = torch.inverse(torch.matmul(H_herm, H_eq) + (n_var**2) * eye)
+            W_MMSE = torch.matmul(second_part, H_herm)
+            y = torch.matmul(H, x_tx) + n0 
+        else:
+            x_tx = V * Tx_sig_flat
+            H_eq = torch.matmul(H, V)
+            H_herm = torch.conj(H_eq).T
+            eye = torch.tensor(1, dtype=torch.complex64).to(device)
+            second_part = 1 / (H_herm * H_eq + (n_var**2) * eye)
+            W_MMSE = second_part*H_herm
+            y = H*x_tx + n0 
+
+        '''
+        second_part = torch.inverse(torch.matmul(H_eq, H_herm) + (n_var**2) * eye)
+        W_MMSE = torch.matmul(H_herm, second_part)
+        '''
+            
+            
+            
+            # if torch.linalg.det(W_MMSE).abs() != 0:
+            #     invertible = True
+
+        ### DEBUG
+       # power_x_tx = torch.mean(torch.abs(x_tx) ** 2)
+       # print(f"La potenza del segnale utile con precodifica (x_tx) è: {power_x_tx.item()}")        
 
 
-        power_n0 = torch.mean(torch.abs(n0) ** 2)
-        print(f"La potenza del segnale del rumore (n0) è: {power_n0.item()}")
+       # n0_real = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
+       # n0_imag = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
+       # n0 = (n0_real + 1j * n0_imag) / torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device)
 
-        power_sigutil = torch.mean(torch.abs(torch.matmul(H, x_tx)) ** 2)
-        print(f"La potenza del segnale utile  (H*x_tx) è: {power_sigutil.item()}")
+        ### DEBUG
+       # power_n0 = torch.mean(torch.abs(n0) ** 2)
+       # print(f"La potenza del segnale del rumore (n0) è: {power_n0.item()}")
+
+        ### DEBUG
+       # power_sigutil = torch.mean(torch.abs(torch.matmul(H, x_tx)) ** 2)
+       # print(f"La potenza del segnale utile  (H*x_tx) è: {power_sigutil.item()}")
 
 
-        y = torch.matmul(H, x_tx) + n0 
+        #y = torch.matmul(H, x_tx) + n0 
         x_hat = torch.matmul(W_MMSE, y)
+        Rx_array = x_hat
         #Rx_array = torch.round(torch.sum(x_hat, dim=0) / n_rx, decimals=7)
         
         #Torch non supporta il rounding dei numeri complessi, quindi è necessario computarlo separatamente per la parte immaginaria e reale
-        Rx_array = torch.sum(x_hat, dim=0) / n_rx
+      #  Rx_array = torch.sum(x_hat, dim=0) / n_rx
         
-        real_part = torch.round(Rx_array.real, decimals=7)
-        imag_part = torch.round(Rx_array.imag, decimals=7)
-        Rx_array = torch.complex(real_part, imag_part)
+       # real_part = torch.round(Rx_array.real, decimals=7)
+       # imag_part = torch.round(Rx_array.imag, decimals=7)
+       # Rx_array = torch.complex(real_part, imag_part)
         
         #ratio = Rx_array/Tx_sig_flat
+
+    #     #DEBUG Robi
+        # tempH = H.cpu().numpy()
+        # dfH= pd.DataFrame(tempH)
+        # dfH.to_csv("matH.csv", index=False)
+
+        # tempV = V.cpu().numpy()
+        # dfV= pd.DataFrame(tempV)
+        # dfV.to_csv("matV.csv", index=False)
+
+        # tempX = Tx_sig_flat.view(1,-1).cpu().detach().numpy()
+        # dfX= pd.DataFrame(tempX)
+        # dfX.to_csv("vetX.csv", index=False)
+
+        # tempN0 = n0.cpu().detach().numpy() 
+        # dfN0 = pd.DataFrame(tempN0)      
+        # dfN0.to_csv("vetN0.csv", index=False)
+
+        # tempWMSSE = W_MMSE.cpu().detach().numpy()
+        # dfMMSE = pd.DataFrame(tempWMSSE)
+        # dfMMSE.to_csv("matWMMSE.csv", index = False) 
+
+        # tempY = y.cpu().detach().numpy()
+        # dfY = pd.DataFrame(tempY)
+        # dfY.to_csv("vetY.csv", index = False) 
+
+        # tempXhat = x_hat .cpu().detach().numpy()
+        # dfXhat = pd.DataFrame(tempXhat)
+        # dfXhat.to_csv("vetXhat.csv", index = False) 
+
+
+    #    # END DEBUG 
+ 
         
         #Reshape the received vector
         #we use half of the multiplication between the second and the third shape values since the original number of symbols was converted to complex values
         Rx_array = Rx_array.view(shape[0], int(shape[1] * shape[2] / 2))
-        real_part = Rx_array.real
-        imaginary_part = Rx_array.imag
+        real_part = Rx_array.real*torch.sqrt(torch.tensor(2.0, dtype=torch.float32))  
+        imaginary_part = Rx_array.imag*torch.sqrt(torch.tensor(2.0, dtype=torch.float32))
     
         Rx_array = torch.stack((real_part, imaginary_part), dim=-1)
         Rx_sig = Rx_array.view(shape)
@@ -469,9 +623,9 @@ def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_t
     if channel == 'AWGN':
         Rx_sig = channels.AWGN(Tx_sig, n_var)
     elif channel == 'Rayleigh':
-        Rx_sig = channels.Rayleigh(Tx_sig, n_var)
+        Rx_sig = channels.Rayleigh(Tx_sig, n_var, n_tx, n_rx)
     elif channel == 'Rician':
-        Rx_sig = channels.Rician(Tx_sig, n_var)
+        Rx_sig = channels.Rician(Tx_sig, n_var, n_tx, n_rx)
     elif channel == 'CDL_ZF':
         Rx_sig = channels.CDL_ZF(Tx_sig, n_var, ch_mat, n_tx, n_rx)
     elif channel == 'CDL_MMSE':
@@ -479,13 +633,14 @@ def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_t
     else:
         raise ValueError("Please choose from AWGN, Rayleigh, and Rician")
     
-    diff_sig = Tx_sig - Rx_sig
-    plt.plot(diff_sig.flatten().to("cpu").detach().numpy())
-    plt.show()
-    plt.grid()
-    power_diff_sig = torch.mean(torch.abs(diff_sig)**2)
-    print(f"La potenza di diff_sig è: {power_diff_sig.item()}")           
-
+    # ### DEBUG 
+    # diff_sig = Tx_sig - Rx_sig
+    # plt.plot(diff_sig.flatten().to("cpu").detach().numpy())
+    # plt.show()
+    # plt.grid()
+    # power_diff_sig = torch.mean(torch.abs(diff_sig)**2)
+    # print(f"La potenza di diff_sig è: {power_diff_sig.item()}")           
+    # ### END DEBUG
 
 
     channel_dec_output = model.channel_decoder(Rx_sig)
@@ -510,6 +665,10 @@ def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_t
         loss_mine = -mi_lb
         loss = loss_ce + lambda_loss* loss_mine
     # loss = loss_function(pred, trg_real, pad)
+    else:
+        loss = loss_ce
+        loss_mine = 0
+        
 
     loss.backward()
     opt.step()
@@ -531,9 +690,9 @@ def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx,
     if channel == 'AWGN':
         Rx_sig = channels.AWGN(Tx_sig, n_var)
     elif channel == 'Rayleigh':
-        Rx_sig = channels.Rayleigh(Tx_sig, n_var)
+        Rx_sig = channels.Rayleigh(Tx_sig, n_var,  n_tx, n_rx)
     elif channel == 'Rician':
-        Rx_sig = channels.Rician(Tx_sig, n_var)
+        Rx_sig = channels.Rician(Tx_sig, n_var,  n_tx, n_rx)
     elif channel == 'CDL_ZF':
         Rx_sig = channels.CDL_ZF(Tx_sig, n_var, ch_mat, n_tx, n_rx)
     elif channel == 'CDL_MMSE':
@@ -554,10 +713,8 @@ def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx,
     torch.nn.utils.clip_grad_norm_(mi_net.parameters(), 10.0)
     #updated network parameters through the optimizer
     opt.step()
-    ### DEBUG ###  
     if math.isinf(loss_mine.item()):
         print(f"Mutual information is infinite:{loss_mine.item()} ")
-    ### END DEBUG ###  
     #returns mutual information loss
     return loss_mine.item()
 
