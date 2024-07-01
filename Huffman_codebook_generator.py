@@ -119,9 +119,9 @@ def huffman_decoder(encoded_file, output_file, codebook):
     print(f"Decoded text saved to {output_file}")
 
 if __name__ == '__main__':
-    save_txt = 0
+    save_txt = 1
     if save_txt == 1: 
-        vocab = json.load(open('europarl/vocab.json', 'rb'))
+        vocab = json.load(open('../data/europarl/vocab.json', 'rb'))
         token_to_idx = vocab['token_to_idx']
         idx_to_token = {v: k for k, v in token_to_idx.items()}  # Inverted dictionary
 
