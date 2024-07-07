@@ -182,13 +182,26 @@ def compl_to_real(mat, n_tx, n_rx):
 
    #  return  U, S, Vh, H_norm
  
-def get_mat(ch_mat, n_tx, n_rx):
-    dim1 = random.randint(0, 19999)
-    dim2 = random.randint(0, 29)
-    dim3 = random.randint(0, 2)
-    
-    # Extract the submatrix from the channel matrix
-    values = ch_mat[dim1, dim2, dim3, :n_rx, :n_tx]
+def get_mat(ch_mat, n_tx, n_rx, channel):
+    if channel == "CDL_MMSE":
+        dim1 = random.randint(0, 19999)
+        dim2 = random.randint(0, 29)
+        dim3 = random.randint(0, 2)
+        
+        # Extract the submatrix from the channel matrix
+        values = ch_mat[dim1, dim2, dim3, :n_rx, :n_tx]
+    elif channel == "Rician":
+        K = 1
+        mean = math.sqrt(K / (K + 1))
+        std = math.sqrt(1 / (K + 1))
+
+        H_real = torch.normal(mean, std, size=[n_rx, n_tx]).to(device)
+        H_imag = torch.normal(mean, std, size=[n_rx, n_tx]).to(device)
+        values = H_real + 1j * H_imag
+    elif channel == "Rayleigh":
+        H_real = torch.normal(0, math.sqrt(1/2), size=[n_rx, n_tx]).to(device)
+        H_imag = torch.normal(0, math.sqrt(1/2), size=[n_rx, n_tx]).to(device)
+        values = H_real + 1j * H_imag
     
     # Convert to PyTorch tensor and move to the specified device
     values = torch.tensor(values, dtype=torch.complex64).to(device)
@@ -397,7 +410,7 @@ class Channels():
         
         return Rx_sig
     
-    def CDL_MMSE(self, Tx_sig, n_var, ch_mat, n_tx, n_rx):
+    def CDL_MMSE(self, Tx_sig, n_var, ch_mat, n_tx, n_rx, channel = "CDL_MMSE"):
         
         shape = Tx_sig.shape
         #power_tx_sig = torch.mean(torch.abs(Tx_sig ** 2))
@@ -408,7 +421,7 @@ class Channels():
         #invertible = False
         
        # while not invertible:
-        _, S, Vh, H = get_mat(ch_mat, n_tx, n_rx)
+        _, S, Vh, H = get_mat(ch_mat, n_tx, n_rx, channel)
         V = torch.conj(Vh[0,:]).T.to(device)
         #reshape tx_signal and define real and imaginary parts
         Tx_sig = Tx_sig.view(shape[0], -1, 2)
@@ -445,6 +458,7 @@ class Channels():
             second_part = 1 / (H_herm * H_eq + (n_var**2) * eye)
             W_MMSE = second_part*H_herm
             y = H*x_tx + n0 
+
 
         '''
         second_part = torch.inverse(torch.matmul(H_eq, H_herm) + (n_var**2) * eye)
@@ -519,6 +533,91 @@ class Channels():
 
 
     #    # END DEBUG 
+ 
+        
+        #Reshape the received vector
+        #we use half of the multiplication between the second and the third shape values since the original number of symbols was converted to complex values
+        Rx_array = Rx_array.view(shape[0], int(shape[1] * shape[2] / 2))
+        real_part = Rx_array.real*torch.sqrt(torch.tensor(2.0, dtype=torch.float32))  
+        imaginary_part = Rx_array.imag*torch.sqrt(torch.tensor(2.0, dtype=torch.float32))
+    
+        Rx_array = torch.stack((real_part, imaginary_part), dim=-1)
+        Rx_sig = Rx_array.view(shape)
+        #.to(torch.float32)
+        
+        
+        #save_differences(TX_array, Rx_sig_ar)
+        
+        return Rx_sig
+    
+    def ch(self, Tx_sig, n_var, ch_mat, n_tx, n_rx, channel):
+        
+        shape = Tx_sig.shape
+        #power_tx_sig = torch.mean(torch.abs(Tx_sig ** 2))
+        ### DEBUG
+       # print(f"La potenza di Tx_sig è: {power_tx_sig.item()}")
+        
+        #Get channel matrix + svd
+        #invertible = False
+        
+       # while not invertible:
+        U, S, Vh, H = get_mat(ch_mat, n_tx, n_rx, channel)
+        V = torch.conj(Vh[0,:]).T.to(device)
+        #reshape tx_signal and define real and imaginary parts
+        Tx_sig = Tx_sig.view(shape[0], -1, 2)
+        Tx_sig = torch.view_as_complex(Tx_sig)/(torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device))
+
+        
+        Tx_sig_flat = Tx_sig.view(-1)
+        ### DEBUG
+       # power_tx_sig_flat = torch.mean(torch.abs(Tx_sig_flat ** 2))
+       # print(f"La potenza di Tx_sig_flat (segnale senza precoding) è: {power_tx_sig_flat.item()}")    
+        
+        n0_real = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
+        n0_imag = torch.normal(0, n_var, size=(n_rx, Tx_sig_flat.size(0)), dtype=torch.float32).to(device)
+        n0 = (n0_real + 1j * n0_imag) / torch.sqrt(torch.tensor(2.0, dtype=torch.float32)).to(device)
+               
+        
+        if n_tx != 1:
+           # Tx_sig_exp = Tx_sig_flat.unsqueeze(1).repeat(1, min(n_tx,n_rx)).to(device) # Change to unsqueeze and repeat for each layer for correct dimensions
+          #  x_tx = torch.matmul(V, Tx_sig_exp.T)
+           # convert V in a column vector
+            V = V.view(-1,1) 
+            x_tx = torch.matmul(V, Tx_sig_flat.view(1,-1))
+            if channel == "CDL_MMSE":
+                H_eq = torch.matmul(H, V)
+                H_herm = torch.conj(H_eq).T
+                eye = torch.eye(H_eq.shape[1] , dtype=torch.complex64).to(device)
+                second_part = torch.inverse(torch.matmul(H_herm, H_eq) + (n_var**2) * eye)
+                W_MMSE = torch.matmul(second_part, H_herm)
+            y = torch.matmul(H, x_tx)# + n0 
+        else:
+            x_tx = V * Tx_sig_flat
+            if channel == "CDL_MMSE":
+                H_eq = torch.matmul(H, V)
+                H_herm = torch.conj(H_eq).T
+                eye = torch.tensor(1, dtype=torch.complex64).to(device)
+                second_part = 1 / (H_herm * H_eq + (n_var**2) * eye)
+                W_MMSE = second_part*H_herm
+            y = H*x_tx# + n0 
+
+
+        if channel == "CDL_MMSE":
+            x_hat = torch.matmul(W_MMSE, y)
+            Rx_array = x_hat
+        else:
+            x_hat = torch.conj(U).T @ y 
+            #S = torch.diag(S)
+            #S_inv = torch.linalg.pinv(S)
+            #S_inv = torch.diag(1.0/S)
+            S_inv = torch.tensor(1.0/S, dtype = torch.complex64).to(device)
+            if n_tx != 1: 
+                x_hat = S_inv@ x_hat
+               # Rx_array = np.round((np.sum(x_hat, axis=0) / 2), decimals = 7)
+                Rx_array = x_hat
+            else:
+                Rx_array = S_inv * x_hat
+        ratio = Rx_array/Tx_sig_flat
  
         
         #Reshape the received vector
@@ -622,14 +721,8 @@ def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_t
 
     if channel == 'AWGN':
         Rx_sig = channels.AWGN(Tx_sig, n_var)
-    elif channel == 'Rayleigh':
-        Rx_sig = channels.Rayleigh(Tx_sig, n_var, n_tx, n_rx)
-    elif channel == 'Rician':
-        Rx_sig = channels.Rician(Tx_sig, n_var, n_tx, n_rx)
-    elif channel == 'CDL_ZF':
-        Rx_sig = channels.CDL_ZF(Tx_sig, n_var, ch_mat, n_tx, n_rx)
-    elif channel == 'CDL_MMSE':
-        Rx_sig = channels.CDL_MMSE(Tx_sig, n_var, ch_mat, n_tx, n_rx)
+    elif channel == "Rician" or channel == "Rayleigh" or channel == "CDL_MMSE":
+        Rx_sig = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
     else:
         raise ValueError("Please choose from AWGN, Rayleigh, and Rician")
     
@@ -689,14 +782,8 @@ def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx,
 
     if channel == 'AWGN':
         Rx_sig = channels.AWGN(Tx_sig, n_var)
-    elif channel == 'Rayleigh':
-        Rx_sig = channels.Rayleigh(Tx_sig, n_var,  n_tx, n_rx)
-    elif channel == 'Rician':
-        Rx_sig = channels.Rician(Tx_sig, n_var,  n_tx, n_rx)
-    elif channel == 'CDL_ZF':
-        Rx_sig = channels.CDL_ZF(Tx_sig, n_var, ch_mat, n_tx, n_rx)
-    elif channel == 'CDL_MMSE':
-        Rx_sig = channels.CDL_MMSE(Tx_sig, n_var, ch_mat, n_tx, n_rx)
+    elif channel == "Rician" or channel == "Rayleigh" or channel == "CDL_MMSE":
+        Rx_sig = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
     else:
         raise ValueError("Please choose from AWGN, Rayleigh, Rician, CDL-ZF and CDL-MMSE")
 
@@ -731,14 +818,8 @@ def val_step(model, src, trg, n_var, pad, criterion, channel, ch_mat, n_tx, n_rx
 
     if channel == 'AWGN':
         Rx_sig = channels.AWGN(Tx_sig, n_var)
-    elif channel == 'Rayleigh':
-        Rx_sig = channels.Rayleigh(Tx_sig, n_var)
-    elif channel == 'Rician':
-        Rx_sig = channels.Rician(Tx_sig, n_var)
-    elif channel == 'CDL_ZF':
-        Rx_sig = channels.CDL_ZF(Tx_sig, n_var, ch_mat, n_tx, n_rx)
-    elif channel == 'CDL_MMSE':
-        Rx_sig = channels.CDL_MMSE(Tx_sig, n_var, ch_mat, n_tx, n_rx)
+    elif channel == "Rician" or channel == "Rayleigh" or channel == "CDL_MMSE":
+        Rx_sig = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
     else:
         raise ValueError("Please choose from AWGN, Rayleigh, Rician, CDL-ZF and CDL-MMSE")
 
@@ -769,14 +850,8 @@ def greedy_decode(model, src, n_var, max_len, padding_idx, start_symbol, channel
 
     if channel == 'AWGN':
         Rx_sig = channels.AWGN(Tx_sig, n_var)
-    elif channel == 'Rayleigh':
-        Rx_sig = channels.Rayleigh(Tx_sig, n_var)
-    elif channel == 'Rician':
-        Rx_sig = channels.Rician(Tx_sig, n_var)
-    elif channel == 'CDL_ZF':
-        Rx_sig = channels.CDL_ZF(Tx_sig, n_var, ch_mat, n_tx, n_rx)
-    elif channel == 'CDL_MMSE':
-        Rx_sig = channels.CDL_MMSE(Tx_sig, n_var, ch_mat, n_tx, n_rx)
+    elif channel == "Rician" or channel == "Rayleigh" or channel == "CDL_MMSE":
+        Rx_sig = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
     else:
         raise ValueError("Please choose from AWGN, Rayleigh, Rician, CDL-ZF and CDL-MMSE")       
     #channel_enc_output = model.blind_csi(channel_enc_output)
