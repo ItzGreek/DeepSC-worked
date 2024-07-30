@@ -22,8 +22,8 @@ import scipy.io as sp
 
 parser = argparse.ArgumentParser()
 #parser.add_argument('--data-dir', default='data/train_data.pkl', type=str)
-parser.add_argument('--vocab-file', default='europarl/vocab.json', type=str)
-parser.add_argument('--channel', default='CDL_MMSE', type=str,
+parser.add_argument('--vocab-file', default='../data/europarl/vocab.json', type=str)
+parser.add_argument('--channel', default='Rayleigh', type=str,
                     help='Please choose AWGN, Rayleigh, Rician, CDL_ZF or CDL_MMSE')
 parser.add_argument('--checkpoint-path',
                     default=f'checkpoints/deepsc-{parser.parse_args().channel}', type=str)
@@ -43,21 +43,19 @@ parser.add_argument('--batch-size', default=128, type=int)
 parser.add_argument('--epochs', default=80, type=int) #default is 80
 #addditional arguments for MIMO
 parser.add_argument('--n_rx', default = 2, type = int)
-parser.add_argument('--n_tx', default = 2, type = int) 
+parser.add_argument('--n_tx', default = 32, type = int) 
 # added argument to set lambda parameter in the loss computation
 parser.add_argument('--lambda_loss', default = 0.0009, type = int)# default was 0.0009 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 #device = torch.device("cpu")
 
-### DEBUG ### 
 def check_nan_in_model(model):
     for name, param in model.named_parameters():
         if torch.isnan(param).any():
             print(f"Il parametro {name} contiene NaN")
             return True
     return False
-### END DEBUG ### 
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -76,18 +74,30 @@ def validate(epoch, args, net, ch_mat):
     net.eval()
     pbar = tqdm(test_iterator)
     total = 0
+## TODO check se va bene usare 0.1 come standard deviation del noise o se non sarebbe meglio usare un valore diverso? 
+    n0_std = 0.1 #  
+
     with torch.no_grad():
         for sents in pbar:
             sents = sents.to(device)
-            loss = val_step(net, sents, sents, 0.1, pad_idx,
+            loss = val_step(net, sents, sents, n0_std, pad_idx,
                             criterion, args.channel, ch_mat, args.n_tx, args.n_rx)
-
+            
             total += loss
             pbar.set_description(
                 'Epoch: {}; Type: VAL; Loss: {:.5f}'.format(
                     epoch + 1, loss
                 )
             )
+
+    if not os.path.exists(args.checkpoint_path):
+        os.makedirs(args.checkpoint_path)
+    with open(args.checkpoint_path + '/simresults.log', 'a') as f:
+        f.write('Epoch: {};  Type: VAL; Average Loss: {:.5f}; SNR {:.2f}\n'.format(
+                    epoch + 1, total/len(test_iterator), noise_to_SNR(n0_std)))
+    print('Epoch: {};  Type: VAL;  Total Average Loss: {:.5f}; SNR {:.2f}\n'.format(
+                    epoch + 1, total/len(test_iterator), noise_to_SNR(n0_std)))
+
 
     return total/len(test_iterator)
 
@@ -105,7 +115,7 @@ def train(epoch, args, net, ch_mat, mi_net=None):
     # retrieve the noise standard deviation
     noise_std = np.random.uniform(SNR_to_noise(5), SNR_to_noise(10), size=(1))
 
-    noise_std[0] = 0.1 #DEBUG DELETEME!!!   
+   # noise_std[0] = 0.1 #DEBUG DELETEME!!!   
     count=0
     for sents in pbar:
         count+=1
@@ -216,9 +226,12 @@ if __name__ == '__main__':
         start = time.time()
         record_acc = 10
         record_mi = 10
+        mi = record_mi 
 
         #train(epoch, args, deepsc)
-        mi = train(epoch, args, deepsc, Htot, mi_net)
+        mi = train(epoch, args, deepsc, Htot, mi_net) # training with mi_net
+       # train(epoch, args, deepsc, Htot) # training without mi_net  
+        
         avg_acc = validate(epoch, args, deepsc, Htot)
 
         # Save the best accuracy score as a "checkpoint"

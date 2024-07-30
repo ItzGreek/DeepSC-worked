@@ -183,7 +183,7 @@ def compl_to_real(mat, n_tx, n_rx):
    #  return  U, S, Vh, H_norm
  
 def get_mat(ch_mat, n_tx, n_rx, channel):
-    if channel == "CDL_MMSE":
+    if channel == "CDL_MMSE" or channel == "CDL_ZF":
         dim1 = random.randint(0, 19999)
         dim2 = random.randint(0, 29)
         dim3 = random.randint(0, 2)
@@ -495,7 +495,6 @@ class Channels():
         
         #Torch non supporta il rounding dei numeri complessi, quindi è necessario computarlo separatamente per la parte immaginaria e reale
       #  Rx_array = torch.sum(x_hat, dim=0) / n_rx
-        
        # real_part = torch.round(Rx_array.real, decimals=7)
        # imag_part = torch.round(Rx_array.imag, decimals=7)
        # Rx_array = torch.complex(real_part, imag_part)
@@ -590,7 +589,7 @@ class Channels():
                 eye = torch.eye(H_eq.shape[1] , dtype=torch.complex64).to(device)
                 second_part = torch.inverse(torch.matmul(H_herm, H_eq) + (n_var**2) * eye)
                 W_MMSE = torch.matmul(second_part, H_herm)
-            y = torch.matmul(H, x_tx)# + n0 
+            y = torch.matmul(H, x_tx) + n0 
         else:
             x_tx = V * Tx_sig_flat
             if channel == "CDL_MMSE":
@@ -599,7 +598,7 @@ class Channels():
                 eye = torch.tensor(1, dtype=torch.complex64).to(device)
                 second_part = 1 / (H_herm * H_eq + (n_var**2) * eye)
                 W_MMSE = second_part*H_herm
-            y = H*x_tx# + n0 
+            y = H*x_tx + n0 
 
 
         if channel == "CDL_MMSE":
