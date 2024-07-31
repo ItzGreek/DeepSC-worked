@@ -19,16 +19,14 @@ from models.mutual_info import Mine
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import scipy.io as sp
+import datetime
 
+prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_")
 parser = argparse.ArgumentParser()
 #parser.add_argument('--data-dir', default='data/train_data.pkl', type=str)
 parser.add_argument('--vocab-file', default='../data/europarl/vocab.json', type=str)
-parser.add_argument('--channel', default='Rayleigh', type=str,
+parser.add_argument('--channel', default='CDL_MMSE', type=str,
                     help='Please choose AWGN, Rayleigh, Rician, CDL_ZF or CDL_MMSE')
-parser.add_argument('--checkpoint-path',
-                    default=f'checkpoints/deepsc-{parser.parse_args().channel}', type=str)
-parser.add_argument('--mi-checkpoint-path',
-                    default=f'checkpoints/minet--{parser.parse_args().channel}', type=str)
 #parser.add_argument('--channel', default='Rayleigh', type=str,
  #                   help='Please choose AWGN, Rayleigh, Rician or CDL-B')
 #parser.add_argument('--channel', default='Rician', type=str,
@@ -44,6 +42,10 @@ parser.add_argument('--epochs', default=80, type=int) #default is 80
 #addditional arguments for MIMO
 parser.add_argument('--n_rx', default = 2, type = int)
 parser.add_argument('--n_tx', default = 32, type = int) 
+parser.add_argument('--checkpoint-path',
+                    default=f'checkpoints/{prefix}{parser.parse_args().channel}_{parser.parse_args().n_tx}x{parser.parse_args().n_rx}_{parser.parse_args().epochs}ep/deepsc', type=str)
+parser.add_argument('--mi-checkpoint-path',
+                    default=f'checkpoints/{prefix}{parser.parse_args().channel}_{parser.parse_args().n_tx}x{parser.parse_args().n_rx}_{parser.parse_args().epochs}ep/minet', type=str)
 # added argument to set lambda parameter in the loss computation
 parser.add_argument('--lambda_loss', default = 0.0009, type = int)# default was 0.0009 
 

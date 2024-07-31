@@ -13,7 +13,7 @@ import numpy as np
 from dataset import EurDataset, collate_data
 from models.transceiver import DeepSC
 from torch.utils.data import DataLoader
-from utils import BleuScore, SNR_to_noise, greedy_decode, SeqtoText
+from utils import SNR_to_noise, greedy_decode, SeqtoText
 from tqdm import tqdm
 from sklearn.preprocessing import normalize
 # from bert4keras.backend import keras
@@ -21,13 +21,19 @@ from sklearn.preprocessing import normalize
 # from bert4keras.tokenizers import Tokenizer
 from w3lib.html import remove_tags
 import scipy.io as sp
-import spacy
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from transformers import pipeline
+import datetime
+from post_processing import process_data
 
+
+checkpoint_tested = "20240731_144404_CDL_MMSE_32x2_80ep"
+prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_")
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='europarl/train_data.pkl', type=str)
 parser.add_argument('--vocab-file', default='europarl/vocab.json', type=str)
-parser.add_argument('--checkpoint-path', default='checkpoints/20240620-deepsc-CDL_MMSE2x2_singlelayer_80epoch/', type=str)
+parser.add_argument('--checkpoint-path', default=f'checkpoints/{checkpoint_tested}/deepsc/', type=str)
 parser.add_argument('--channel', default='CDL_MMSE', type=str)
 parser.add_argument('--MAX-LENGTH', default=30, type=int)
 parser.add_argument('--MIN-LENGTH', default=4, type=int)
@@ -103,27 +109,30 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class Similarity():
     def __init__(self):
-        spacy.prefer_gpu()
-       # self.nlp = spacy.load("en_core_web_sm")
-        self.nlp = spacy.load("en_core_web_lg")
+        self.similarity_model = pipeline("feature-extraction", device=0) #use GPU
+        self.smoother = SmoothingFunction()
 
+    def compute_bleuscore(self, sent1, sent2):
+        accum_bs = []
+        for s1, s2 in zip(sent1, sent2):
+            temp_bs = sentence_bleu([s1], s2,smoothing_function=self.smoother.method4)
+            accum_bs.append(temp_bs)
+        return accum_bs
+    
     def compute_similarity(self, real_list, predicted_list):
-        
         similarity_score = []  
         for real, predicted in zip(real_list, predicted_list):
-            doc1 = self.nlp(real)
-            doc2 = self.nlp(predicted)
-
+            doc1 = np.mean(self.similarity_model(real), axis=1)
+            doc2 = np.mean(self.similarity_model(predicted), axis=1)
+            similarity = np.dot(doc1, doc2.T) / (np.linalg.norm(doc1) * np.linalg.norm(doc2))
             # Calculate similarity
-            similarity_score.append(doc1.similarity(doc2))
+            similarity_score.append(similarity[0][0])
         return similarity_score
 
 #Perofrmance evaluation
 def performance(args, SNR, net, file):
     # similarity = Similarity(args.bert_config_path, args.bert_checkpoint_path, args.bert_dict_path)
     similarity = Similarity()
-    #set the weight on 1-grams to 1
-    bleu_score_1gram = BleuScore(1, 0, 0, 0)
     
     mat_file = sp.loadmat('/home/man2mob/PythonStuff/DeepSC/Hmat/H_1.mat')
     Htot = mat_file['Htot']
@@ -171,8 +180,7 @@ def performance(args, SNR, net, file):
             sim_score = []
             count = 0
             for sent1, sent2 in tqdm(zip(Tx_word, Rx_word), total=len(Tx_word)):
-                # 1-gram
-                bleu_score.append(bleu_score_1gram.compute_blue_score(sent1, sent2)) # 7*num_sent
+                bleu_score.append(similarity.compute_bleuscore(sent1, sent2)) # 7*num_sent
                 sim_score.append(similarity.compute_similarity(sent1, sent2)) # 7*num_sent
                 #Write TX and RX message in the output file
                 file.write(f"**************  SNR: {SNR[count]} dB  **************\n")
@@ -202,7 +210,7 @@ if __name__ == '__main__':
     SNR = [0,3,6,9,12,15,18]
     args.vocab_file = '/home/man2mob/PythonStuff/DeepSC/data/' + args.vocab_file
    
-    "args.vocab_file = '/import/antennas/Datasets/hx301/' + args.vocab_file"
+    #args.vocab_file = '/import/antennas/Datasets/hx301/' + args.vocab_file
     vocab = json.load(open(args.vocab_file, 'rb'))
     token_to_idx = vocab['token_to_idx']
     idx_to_token = dict(zip(token_to_idx.values(), token_to_idx.keys()))
@@ -231,11 +239,18 @@ if __name__ == '__main__':
     print('model load!')
 
     #bleu computation
-    with open('performance_results.txt', 'w') as file:
+    with open(f'{args.checkpoint_path}{prefix}TXvsRX_sentences_comparison.txt', 'w') as file:
        # BLEU computation
        bleu_score, similarity_score = performance(args, SNR, deepsc, file)
-       file.write(f"BLEU scores: {bleu_score}\n")
-       file.write(f"Similarity scores: {similarity_score}\n")
+
+    with open(f'{args.checkpoint_path}{prefix}performance_results.txt', 'w') as file:
+       file.write(f"Tested Checkpoint: {checkpoint_tested}\n")
+       file.write(f"SINR: {SNR}\n")
+       file.write(f"BLEU scores: {list(bleu_score)}\n")
+       file.write(f"Similarity scores: {list(similarity_score)}\n")
+
+    process_data(f'{args.checkpoint_path}')
+    
 
     print(f"bleu_score: {bleu_score} \nsimilarity_score: {similarity_score}   ")
    
