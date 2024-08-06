@@ -25,15 +25,28 @@ from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from transformers import pipeline
 import datetime
 from post_processing import process_data
+import re
 
 
-checkpoint_tested = "20240731_144404_CDL_MMSE_32x2_80ep"
+checkpoint_tested = "20240805_182831_Rayleigh_1x1_80ep"
+
+# Espressione regolare per trovare la sequenza _MxN_
+match_num_ant = re.search(r'_(\d+)x(\d+)_', checkpoint_tested)
+
+if match_num_ant:
+    n_tx = int(match_num_ant.group(1))  # Il numero prima della 'x'
+    n_rx = int(match_num_ant.group(2))  # Il numero dopo la 'x'
+else:
+    print("WARNING il nome del checkpoint non include il numero di antenne in ricezione e trasmissione. Usati default n_tx=1, n_rx=1")
+    n_tx = 1
+    n_rx = 1
+
 prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_")
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data-dir', default='europarl/train_data.pkl', type=str)
 parser.add_argument('--vocab-file', default='europarl/vocab.json', type=str)
-parser.add_argument('--checkpoint-path', default=f'checkpoints/{checkpoint_tested}/deepsc/', type=str)
+parser.add_argument('--checkpoint-path', default=f'checkpoints/{checkpoint_tested}', type=str)
 parser.add_argument('--channel', default='CDL_MMSE', type=str)
 parser.add_argument('--MAX-LENGTH', default=30, type=int)
 parser.add_argument('--MIN-LENGTH', default=4, type=int)
@@ -46,8 +59,8 @@ parser.add_argument('--epochs', default=2, type = int)
 parser.add_argument('--bert-config-path', default='bert/cased_L-12_H-768_A-12/bert_config.json', type = str)
 parser.add_argument('--bert-checkpoint-path', default='bert/cased_L-12_H-768_A-12/bert_model.ckpt', type = str)
 parser.add_argument('--bert-dict-path', default='bert/cased_L-12_H-768_A-12/vocab.txt', type = str)
-parser.add_argument('--n_rx', default = 2, type = int)
-parser.add_argument('--n_tx', default = 2, type = int)
+parser.add_argument('--n_rx', default = n_rx, type = int)
+parser.add_argument('--n_tx', default = n_tx, type = int)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -226,10 +239,10 @@ if __name__ == '__main__':
 
     model_paths = []
     #iterates through checkpoint files
-    for fn in os.listdir(args.checkpoint_path):
+    for fn in os.listdir(f'{args.checkpoint_path}/deepsc'):
         if not fn.endswith('.pth'): continue
         idx = int(os.path.splitext(fn)[0].split('_')[-1])  # read the idx of image
-        model_paths.append((os.path.join(args.checkpoint_path, fn), idx)) #store the path
+        model_paths.append((os.path.join(f'{args.checkpoint_path}/deepsc', fn), idx)) #store the path
 
     model_paths.sort(key=lambda x: x[1])  # sort the image by the idx
 
@@ -239,11 +252,11 @@ if __name__ == '__main__':
     print('model load!')
 
     #bleu computation
-    with open(f'{args.checkpoint_path}{prefix}TXvsRX_sentences_comparison.txt', 'w') as file:
+    with open(f'{args.checkpoint_path}/{prefix}TXvsRX_sentences_comparison.txt', 'w') as file:
        # BLEU computation
        bleu_score, similarity_score = performance(args, SNR, deepsc, file)
 
-    with open(f'{args.checkpoint_path}{prefix}performance_results.txt', 'w') as file:
+    with open(f'{args.checkpoint_path}/{prefix}performance_results.txt', 'w') as file:
        file.write(f"Tested Checkpoint: {checkpoint_tested}\n")
        file.write(f"SINR: {SNR}\n")
        file.write(f"BLEU scores: {list(bleu_score)}\n")

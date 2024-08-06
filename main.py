@@ -25,7 +25,7 @@ prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_")
 parser = argparse.ArgumentParser()
 #parser.add_argument('--data-dir', default='data/train_data.pkl', type=str)
 parser.add_argument('--vocab-file', default='../data/europarl/vocab.json', type=str)
-parser.add_argument('--channel', default='CDL_MMSE', type=str,
+parser.add_argument('--channel', default='Rayleigh', type=str,
                     help='Please choose AWGN, Rayleigh, Rician, CDL_ZF or CDL_MMSE')
 #parser.add_argument('--channel', default='Rayleigh', type=str,
  #                   help='Please choose AWGN, Rayleigh, Rician or CDL-B')
@@ -40,12 +40,13 @@ parser.add_argument('--num-heads', default=8, type=int)
 parser.add_argument('--batch-size', default=128, type=int)
 parser.add_argument('--epochs', default=80, type=int) #default is 80
 #addditional arguments for MIMO
-parser.add_argument('--n_rx', default = 2, type = int)
-parser.add_argument('--n_tx', default = 32, type = int) 
+parser.add_argument('--n_rx', default = 1, type = int)
+parser.add_argument('--n_tx', default = 1, type = int)
+checkpoint_dir = f"checkpoints/{prefix}{parser.parse_args().channel}_{parser.parse_args().n_tx}x{parser.parse_args().n_rx}_{parser.parse_args().epochs}ep" 
 parser.add_argument('--checkpoint-path',
-                    default=f'checkpoints/{prefix}{parser.parse_args().channel}_{parser.parse_args().n_tx}x{parser.parse_args().n_rx}_{parser.parse_args().epochs}ep/deepsc', type=str)
+                    default=f'{checkpoint_dir}/deepsc', type=str)
 parser.add_argument('--mi-checkpoint-path',
-                    default=f'checkpoints/{prefix}{parser.parse_args().channel}_{parser.parse_args().n_tx}x{parser.parse_args().n_rx}_{parser.parse_args().epochs}ep/minet', type=str)
+                    default=f'{checkpoint_dir}/minet', type=str)
 # added argument to set lambda parameter in the loss computation
 parser.add_argument('--lambda_loss', default = 0.0009, type = int)# default was 0.0009 
 
@@ -92,9 +93,9 @@ def validate(epoch, args, net, ch_mat):
                 )
             )
 
-    if not os.path.exists(args.checkpoint_path):
-        os.makedirs(args.checkpoint_path)
-    with open(args.checkpoint_path + '/simresults.log', 'a') as f:
+    if not os.path.exists(checkpoint_dir):
+        os.makedirs(checkpoint_dir)
+    with open(checkpoint_dir + '/simresults.log', 'a') as f:
         f.write('Epoch: {};  Type: VAL; Average Loss: {:.5f}; SNR {:.2f}\n'.format(
                     epoch + 1, total/len(test_iterator), noise_to_SNR(n0_std)))
     print('Epoch: {};  Type: VAL;  Total Average Loss: {:.5f}; SNR {:.2f}\n'.format(
@@ -117,7 +118,7 @@ def train(epoch, args, net, ch_mat, mi_net=None):
     # retrieve the noise standard deviation
     noise_std = np.random.uniform(SNR_to_noise(5), SNR_to_noise(10), size=(1))
 
-   # noise_std[0] = 0.1 #DEBUG DELETEME!!!   
+    #noise_std[0] = 0.1 #DEBUG DELETEME!!!   
     count=0
     for sents in pbar:
         count+=1
@@ -129,11 +130,11 @@ def train(epoch, args, net, ch_mat, mi_net=None):
             mi = train_mi(net, mi_net, sents, noise_std[0],
                           pad_idx, mi_opt, args.channel, ch_mat, args.n_tx, args.n_rx)
 
-            loss, loss_ce, loss_mine, src_firstsent, pred_firstsent = train_step(net, sents, sents, noise_std[0], pad_idx,
+            loss, loss_ce, loss_mine, src_firstsent, pred_firstsent, SNR_inst = train_step(net, sents, sents, noise_std[0], pad_idx,
                               optimizer, criterion, args.channel, ch_mat, args.n_tx, args.n_rx, mi_net=mi_net, lambda_loss=args.lambda_loss)
             pbar.set_description(
-                'Epoch: {};  Type: Train; Loss: {:.5f}; Loss_CE {:.5f}; Loss_MI {:.5f}; MI {:.5f}; SNR {:.2f}'.format(
-                    epoch + 1, loss, loss_ce, loss_mine, mi, noise_to_SNR(noise_std[0])
+                'Epoch: {};  Type: Train; Loss: {:.5f}; Loss_CE {:.5f}; Loss_MI {:.5f}; MI {:.5f}; SNR {:.2f}; SNR_inst {:.2f}'.format(
+                    epoch + 1, loss, loss_ce, loss_mine, mi, noise_to_SNR(noise_std[0]), SNR_inst
                 )
             )
             
@@ -157,11 +158,11 @@ def train(epoch, args, net, ch_mat, mi_net=None):
     # Stampa le due frasi
     print("Input sentence:", input_sentence_text)
     print("Predicted sentence:", pred_sentence_text)
-    if not os.path.exists(args.checkpoint_path):
-        os.makedirs(args.checkpoint_path)
-    with open(args.checkpoint_path + '/simresults.log', 'a') as f:
-        f.write('Epoch: {};  Type: Train; Loss: {:.5f}; Loss_CE {:.5f}; Loss_MI {:.5f}; MI {:.5f}; SNR {:.2f}\n'.format(
-                    epoch + 1, loss, loss_ce, loss_mine, mi, noise_to_SNR(noise_std[0])))
+    if not os.path.exists(checkpoint_dir):
+        os.makedirs(checkpoint_dir)
+    with open(checkpoint_dir + '/simresults.log', 'a') as f:
+        f.write('Epoch: {};  Type: Train; Loss: {:.5f}; Loss_CE {:.5f}; Loss_MI {:.5f}; MI {:.5f}; SNR {:.2f}; SNR_inst {:.2f}\n'.format(
+                    epoch + 1, loss, loss_ce, loss_mine, mi, noise_to_SNR(noise_std[0]), SNR_inst ))
         f.write(f"Input sentence: {input_sentence_text}\n")
         f.write(f"Predicted sentence:{pred_sentence_text}\n")
 

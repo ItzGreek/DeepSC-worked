@@ -190,6 +190,12 @@ def get_mat(ch_mat, n_tx, n_rx, channel):
         
         # Extract the submatrix from the channel matrix
         values = ch_mat[dim1, dim2, dim3, :n_rx, :n_tx]
+        # normalize channel coefficients in the channel matrix to have average power = 1
+        #norm_fact = np.mean(np.abs(values)**2)
+        #values = values / np.sqrt(norm_fact)
+        correction_fact = 1/n_tx
+        values = values / np.sqrt(correction_fact)
+        
     elif channel == "Rician":
         K = 1
         mean = math.sqrt(K / (K + 1))
@@ -199,19 +205,19 @@ def get_mat(ch_mat, n_tx, n_rx, channel):
         H_imag = torch.normal(mean, std, size=[n_rx, n_tx]).to(device)
         values = H_real + 1j * H_imag
     elif channel == "Rayleigh":
-        H_real = torch.normal(0, math.sqrt(1/2), size=[n_rx, n_tx]).to(device)
-        H_imag = torch.normal(0, math.sqrt(1/2), size=[n_rx, n_tx]).to(device)
-        values = H_real + 1j * H_imag
+        H_real = torch.normal(0, 1, size=[n_rx, n_tx]).to(device)
+        H_imag = torch.normal(0, 1, size=[n_rx, n_tx]).to(device)
+        values = (H_real + 1j * H_imag)/torch.sqrt(torch.tensor(2))
     
     # Convert to PyTorch tensor and move to the specified device
-    values = torch.tensor(values, dtype=torch.complex64).to(device)
-    
-    # Compute the Frobenius norm
-    norm_fact = torch.linalg.norm(values, 'fro')
+    #values = torch.tensor(values, dtype=torch.complex64).to(device)
+    H_norm = torch.tensor(values, dtype=torch.complex64).to(device)
+    ## Compute the Frobenius norm
+    #norm_fact = torch.linalg.norm(values, 'fro')
     
     # Normalize the matrix
-    H_norm = torch.sqrt(torch.tensor(n_rx).to(device))*values / norm_fact
-    
+    #H_norm = torch.sqrt(torch.tensor(n_rx).to(device))*values / norm_fact
+
     # Perform Singular Value Decomposition (SVD)
     U, S, Vh = torch.linalg.svd(H_norm, full_matrices=False)
     
@@ -238,7 +244,7 @@ class Channels():
     def AWGN(self, Tx_sig, n_var, n_tx, n_rx):
         Rx_sig = Tx_sig + torch.normal(0, n_var, size=Tx_sig.shape).to(device)
         return Rx_sig
-
+    
     def Rayleigh(self, Tx_sig, n_var, n_rx, n_tx):
         shape = Tx_sig.shape
         power_txsig = torch.mean(torch.abs(Tx_sig) ** 2)
@@ -304,7 +310,7 @@ class Channels():
 
         return Rx_sig
         
-        
+    '''   
     def Rician(self, Tx_sig, n_var, n_tx, n_rx, K=1):
         shape = Tx_sig.shape
         
@@ -460,10 +466,9 @@ class Channels():
             y = H*x_tx + n0 
 
 
-        '''
-        second_part = torch.inverse(torch.matmul(H_eq, H_herm) + (n_var**2) * eye)
-        W_MMSE = torch.matmul(H_herm, second_part)
-        '''
+        #second_part = torch.inverse(torch.matmul(H_eq, H_herm) + (n_var**2) * eye)
+        #W_MMSE = torch.matmul(H_herm, second_part)
+        
             
             
             
@@ -548,7 +553,7 @@ class Channels():
         #save_differences(TX_array, Rx_sig_ar)
         
         return Rx_sig
-    
+    '''
     def ch(self, Tx_sig, n_var, ch_mat, n_tx, n_rx, channel):
         
         shape = Tx_sig.shape
@@ -583,7 +588,7 @@ class Channels():
            # convert V in a column vector
             V = V.view(-1,1) 
             x_tx = torch.matmul(V, Tx_sig_flat.view(1,-1))
-            if channel == "CDL_MMSE":
+            if channel == "CDL_MMSE" or channel=="Rayleigh":
                 H_eq = torch.matmul(H, V)
                 H_herm = torch.conj(H_eq).T
                 eye = torch.eye(H_eq.shape[1] , dtype=torch.complex64).to(device)
@@ -592,7 +597,7 @@ class Channels():
             y = torch.matmul(H, x_tx) + n0 
         else:
             x_tx = V * Tx_sig_flat
-            if channel == "CDL_MMSE":
+            if channel == "CDL_MMSE" or channel=="Rayleigh":
                 H_eq = torch.matmul(H, V)
                 H_herm = torch.conj(H_eq).T
                 eye = torch.tensor(1, dtype=torch.complex64).to(device)
@@ -601,9 +606,11 @@ class Channels():
             y = H*x_tx + n0 
 
 
-        if channel == "CDL_MMSE":
+        if channel == "CDL_MMSE" or channel=="Rayleigh":
             x_hat = torch.matmul(W_MMSE, y)
             Rx_array = x_hat
+            SNR_inst = 10*torch.log10(torch.abs(W_MMSE*H*x_tx)**2/torch.abs(W_MMSE*n0)**2).cpu().detach().numpy().mean()
+            
         else:
             x_hat = torch.conj(U).T @ y 
             #S = torch.diag(S)
@@ -632,7 +639,7 @@ class Channels():
         
         #save_differences(TX_array, Rx_sig_ar)
         
-        return Rx_sig
+        return Rx_sig, SNR_inst
 
 def initNetParams(model):
     '''Init net parameters.'''
@@ -720,8 +727,9 @@ def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_t
 
     if channel == 'AWGN':
         Rx_sig = channels.AWGN(Tx_sig, n_var)
+        SNR_inst = 10*np.log10(1/n_var**2)
     elif channel == "Rician" or channel == "Rayleigh" or channel == "CDL_MMSE":
-        Rx_sig = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
+        Rx_sig, SNR_inst = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
     else:
         raise ValueError("Please choose from AWGN, Rayleigh, and Rician")
     
@@ -765,7 +773,7 @@ def train_step(model, src, trg, n_var, pad, opt, criterion, channel, ch_mat, n_t
     loss.backward()
     opt.step()
 
-    return loss.item(), loss_ce.item(), lambda_loss*loss_mine, src[0], pred[0]
+    return loss.item(), loss_ce.item(), lambda_loss*loss_mine, src[0], pred[0], SNR_inst
 
 
 def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx, n_rx):
@@ -782,7 +790,7 @@ def train_mi(model, mi_net, src, n_var, padding_idx, opt, channel, ch_mat, n_tx,
     if channel == 'AWGN':
         Rx_sig = channels.AWGN(Tx_sig, n_var)
     elif channel == "Rician" or channel == "Rayleigh" or channel == "CDL_MMSE":
-        Rx_sig = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
+        Rx_sig, _ = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
     else:
         raise ValueError("Please choose from AWGN, Rayleigh, Rician, CDL-ZF and CDL-MMSE")
 
@@ -817,8 +825,10 @@ def val_step(model, src, trg, n_var, pad, criterion, channel, ch_mat, n_tx, n_rx
 
     if channel == 'AWGN':
         Rx_sig = channels.AWGN(Tx_sig, n_var)
-    elif channel == "Rician" or channel == "Rayleigh" or channel == "CDL_MMSE":
-        Rx_sig = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
+    elif channel == "Rician"  or channel == "CDL_MMSE":
+        Rx_sig, _ = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
+    elif channel == "Rayleigh":
+        Rx_sig, _ = channels.Rayleigh(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
     else:
         raise ValueError("Please choose from AWGN, Rayleigh, Rician, CDL-ZF and CDL-MMSE")
 
@@ -850,7 +860,7 @@ def greedy_decode(model, src, n_var, max_len, padding_idx, start_symbol, channel
     if channel == 'AWGN':
         Rx_sig = channels.AWGN(Tx_sig, n_var)
     elif channel == "Rician" or channel == "Rayleigh" or channel == "CDL_MMSE":
-        Rx_sig = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
+        Rx_sig, _ = channels.ch(Tx_sig, n_var, ch_mat, n_tx, n_rx, channel)
     else:
         raise ValueError("Please choose from AWGN, Rayleigh, Rician, CDL-ZF and CDL-MMSE")       
     #channel_enc_output = model.blind_csi(channel_enc_output)

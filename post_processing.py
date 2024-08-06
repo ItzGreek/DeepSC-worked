@@ -5,7 +5,7 @@ import argparse
 import numpy as np
 from datetime import datetime
 
-checkpoint_tested = "20240731_144404_CDL_MMSE_32x2_80ep"
+checkpoint_tested = "20240731_164825_Rayleigh_32x2_200ep"
 
 
 def process_data(directory):
@@ -31,8 +31,8 @@ def process_data(directory):
                 loss = float(re.search(r'Loss: ([\d.]+);', line).group(1))
                 ce = float(re.search(r'Loss_CE ([\d.]+);', line).group(1))
                 mi_loss = float(re.search(r'Loss_MI ([\d.-]+);', line).group(1))
-                mutual_info = float(re.search(r'MI ([\d.-]+);', line).group(1))
-                snr_value = float(re.search(r'SNR ([\d.]+)', line).group(1))
+                mutual_info = float(re.search(r'\bMI ([\d.-]+);', line).group(1))
+                snr_value = float(re.search(r'SNR_inst ([\d.-]+)', line).group(1))
                 
                 epochs.append(epoch)
                 train_losses.append(loss)
